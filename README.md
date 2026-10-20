@@ -25,6 +25,7 @@ In the view:
 - Drag to orbit, and use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move around.
 - **Click the graph** to pin a live readout of the value there. <kbd>Esc</kbd> clears it.
 - **2D** flattens the picture: a side view, top-down heatmap or flat phase portrait. The 3D trajectory has no 2D form, and the app says so.
+- Drag the right edge of the equation panel to widen it. Its text and math grow with it, up to 40% of the window. Double-click the edge to reset.
 - **Settings** (top right) holds every preference. Right now that's the look: Hologram, Plain (no glow effects) or Light (light background).
 
 Press <kbd>Space</kbd> to pause and <kbd>R</kbd> to restart.

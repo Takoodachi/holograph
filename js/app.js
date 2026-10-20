@@ -394,10 +394,48 @@ function setLook(look) {
   scopeInk = { colors: ['--accent', '--text', '--blue'].map(v => css.getPropertyValue(v).trim()), grid: css.getPropertyValue('--line').trim() };
   if (state.ctx) showView(true); // rebuild the view in the new colours; the simulation and camera carry on
 }
-document.querySelectorAll('#looks button').forEach(b => { b.onclick = () => setLook(b.dataset.look); });
+// crossfade the whole page, 3D view included, instead of flashing between dark and light (timing in style.css)
+document.querySelectorAll('#looks button').forEach(b => {
+  b.onclick = () => (document.startViewTransition ? document.startViewTransition(() => setLook(b.dataset.look)) : setLook(b.dataset.look));
+});
 let savedLook = null;
 try { savedLook = localStorage.getItem('holograph.look'); } catch {}
 setLook(savedLook);
+
+// ---------- resizable side panel: drag its edge; the contents scale with the width, up to 40% of the window ----------
+const PANEL = 400, resizer = $('#resizer'), rootStyle = document.documentElement.style;
+let panelWanted = PANEL;
+function setPanel(w, remember = true) {
+  const max = innerWidth * 0.4, px = Math.round(Math.min(max, Math.max(Math.min(340, max), w)));
+  if (remember) panelWanted = px;
+  rootStyle.setProperty('--pw-user', `${px}px`);
+  rootStyle.setProperty('--ps', px / PANEL);
+  resizer.setAttribute('aria-valuenow', px);
+  resizer.setAttribute('aria-valuemax', Math.round(max));
+}
+const savePanel = () => { try { localStorage.setItem('holograph.panel', panelWanted); } catch {} };
+resizer.addEventListener('pointerdown', e => {
+  resizer.setPointerCapture(e.pointerId);
+  document.body.classList.add('resizing');
+  resizer.onpointermove = ev => setPanel(ev.clientX);
+});
+resizer.addEventListener('lostpointercapture', () => {
+  resizer.onpointermove = null;
+  document.body.classList.remove('resizing');
+  savePanel();
+});
+resizer.addEventListener('dblclick', () => { setPanel(PANEL); savePanel(); });
+resizer.addEventListener('keydown', e => {
+  const d = { ArrowLeft: -20, ArrowRight: 20 }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  setPanel(panelWanted + d);
+  savePanel();
+});
+addEventListener('resize', () => setPanel(panelWanted, false)); // a smaller window clamps it; the chosen width comes back
+let savedPanel = 0;
+try { savedPanel = +localStorage.getItem('holograph.panel'); } catch {}
+setPanel(savedPanel || PANEL);
 
 // ---------- examples ----------
 function load(p) {
