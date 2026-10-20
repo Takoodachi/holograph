@@ -96,6 +96,7 @@
         <dt>Functions</dt><dd><code>sin cos exp ln sqrt abs</code>, comparisons like <code>|x|&lt;0.3</code> for step shapes</dd>
       </dl>
       <p>Type plain text or paste LaTeX. Press <kbd>Space</kbd> to pause and <kbd>R</kbd> to restart.</p>
+      <p>In the view: drag to orbit, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, click the graph to read the value there (<kbd>Esc</kbd> clears it).</p>
     </details>
   </aside>
 
@@ -106,6 +107,11 @@
       <span id="hud-kind"></span>
       <span id="hud-view" class="dim"></span>
     </div>
+    <div id="dims" class="seg dims" role="group" aria-label="View dimension">
+      <button data-flat="0" class="on" title="Free 3D view">3D</button>
+      <button data-flat="1" title="Flat 2D view, when the picture has one">2D</button>
+    </div>
+    <div id="probe" class="probe mono" role="status" aria-live="off" hidden></div>
     <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
     <div class="transport">
       <button id="reset" class="circle" aria-label="Restart from initial conditions" title="Restart (R)">

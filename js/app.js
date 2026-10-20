@@ -18,6 +18,7 @@ const state = {
   model: null, view: null, sim: null, view3d: null, ctx: null, broken: false,
   P: {}, range: {}, ic: {}, bc: 'fixed', domain: [-1, 1],
   playing: true, speed: 1, trace: [],
+  flat: false, probe: null, held: new Set(),
 };
 const stage = createStage($('#stage'));
 
@@ -59,25 +60,32 @@ function status(msg, err = false) {
   $('#status').classList.toggle('err', err);
 }
 
+// Small notice in the top-right corner; toast('') hides it
+let toastTimer;
+function toast(msg, ms = 4000) {
+  $('#toast').textContent = msg;
+  $('#toast').hidden = !msg;
+  clearTimeout(toastTimer);
+  if (msg) toastTimer = setTimeout(() => { $('#toast').hidden = true; }, ms);
+}
+
 // Virtual keyboard: one click outside it shows a hint, a second click (within 3 s) closes it
 let armed = false, disarm;
 addEventListener('pointerdown', e => {
   const kb = window.mathVirtualKeyboard;
   if (!kb?.visible) return;
-  const toast = $('#toast');
   clearTimeout(disarm);
   if (e.target.closest?.('.ML__keyboard, math-field')) {
     armed = false;
-    toast.hidden = true;
+    toast('');
   } else if (armed) {
     kb.hide();
     armed = false;
-    toast.hidden = true;
+    toast('');
   } else {
     armed = true;
-    toast.textContent = 'Click again to close the keyboard';
-    toast.hidden = false;
-    disarm = setTimeout(() => { armed = false; toast.hidden = true; }, 3000);
+    toast('Click again to close the keyboard', 3000);
+    disarm = setTimeout(() => { armed = false; }, 3000);
   }
 }, true);
 
@@ -223,7 +231,7 @@ function reset() {
     if (Y0.some(v => !Number.isFinite(v))) return status('Initial conditions must be finite numbers', true);
     const { lo, hi } = scan(m, P, Y0);
     state.sim = odeSim(m, P, Y0);
-    state.ctx = { lo, hi, P, coords: m.coords, field: m.state.length === 2 ? m.deriv : null };
+    state.ctx = { lo, hi, P, coords: m.coords, field: m.state.length === 2 ? m.deriv : null, labels: icSpecs(m).map(s => s.label.replace('(0)', '')) };
   } else {
     const [a, b] = state.domain;
     const sim = pdeSim(m, P, { n: m.dims === 2 ? 81 : 241, a, b, bc: state.bc }, (x, y) => ics.fn.u0(P, x, y), (x, y) => ics.fn.v0?.(P, x, y) ?? 0);
@@ -238,14 +246,43 @@ function reset() {
   status(m.label);
   $('#hud-kind').textContent = m.label;
   $('#hud-view').textContent = VIEW_NAMES[state.view];
-  state.view3d = stage.show(VIEWS[state.view](state.ctx));
-  state.sim.tap = state.view3d.step;
+  showView();
   state.trace = [];
   $('#scope-box').hidden = m.kind !== 'ode';
   if (m.kind === 'ode') $('#scope-legend').replaceChildren(...scopeComps(m).map((k, i) => {
     return el('span', `s${i}`, icSpecs(m)[k].label.replace('(0)', '(t)'));
   }));
 }
+
+// (Re)build the view for the current simulation: drops the probe and re-applies 2D where the view has a 2D form
+function showView(keepCamera = false) {
+  state.view3d = stage.show(VIEWS[state.view](state.ctx), keepCamera);
+  state.sim.tap = state.view3d.step;
+  state.probe = null;
+  applyFlat();
+}
+
+function applyFlat() {
+  if (!stage.setFlat(state.flat)) {
+    state.flat = false;
+    const alt = state.model.views.includes('phase') ? ' Try Phase space for a 2D view.' : '';
+    toast(`2D isn't possible for the ${VIEW_NAMES[state.view]}: its motion needs all three axes.${alt}`);
+  }
+  document.querySelectorAll('#dims button').forEach(b => b.classList.toggle('on', (b.dataset.flat === '1') === state.flat));
+}
+document.querySelectorAll('#dims button').forEach(b => {
+  b.onclick = () => { state.flat = b.dataset.flat === '1'; if (state.view3d) applyFlat(); };
+});
+
+// Click (not drag) on the graph: a ripple spreads from that point and a live readout of the value there is pinned to it
+const canvas = $('#stage');
+let press = null;
+canvas.addEventListener('pointerdown', e => { press = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+canvas.addEventListener('pointerup', e => {
+  if (!press || !state.view3d || Math.hypot(e.clientX - press.x, e.clientY - press.y) > 5 || performance.now() - press.t > 500) return;
+  state.probe = state.view3d.probe?.(stage.raycaster(e.clientX, e.clientY)) ?? null;
+  if (state.probe && !state.broken) stage.ripple(state.probe(state.sim.S, state.sim.t).at);
+});
 
 // ---------- transport ----------
 function setPlaying(on) {
@@ -266,11 +303,19 @@ $('#speeds').replaceChildren(...[0.25, 0.5, 1, 2, 4].map(s => {
   };
   return b;
 }));
+// WASD moves through the scene (held keys are applied every frame); Esc removes the readout
+const MOVE = new Set(['w', 'a', 's', 'd']);
 addEventListener('keydown', e => {
-  if (e.target.closest?.('math-field, input, button')) return;
+  if (e.target.closest?.('math-field, input') || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (MOVE.has(k)) { state.held.add(k); e.preventDefault(); return; }
+  if (k === 'escape') state.probe = null;
+  if (e.target.closest?.('button')) return;
   if (e.code === 'Space') { e.preventDefault(); $('#play').click(); }
-  if (e.key === 'r' || e.key === 'R') $('#reset').click();
+  if (k === 'r') $('#reset').click();
 });
+addEventListener('keyup', e => state.held.delete(e.key.toLowerCase()));
+addEventListener('blur', () => state.held.clear());
 
 // ---------- scope: the ODE's signals over the last 10 s ----------
 let scopeInk = { colors: [], grid: '' }; // read from the CSS theme in setLook()
@@ -330,6 +375,10 @@ function frame(now) {
     }
     $('#clock').textContent = `t = ${sim.t.toFixed(2)}`;
   }
+  const probe = state.probe && !state.broken ? state.probe(sim.S, sim.t) : null, at = probe && stage.project(probe.at), tag = $('#probe');
+  tag.hidden = !at;
+  if (at) Object.assign(tag, { textContent: probe.text }).style.cssText = `left:${at.x}px;top:${at.y}px`;
+  if (state.held.size) stage.move(state.held, real);
   stage.render(now / 1000);
 }
 
@@ -342,10 +391,7 @@ function setLook(look) {
   stage.setLook(look);
   const css = getComputedStyle(document.documentElement);
   scopeInk = { colors: ['--accent', '--text', '--blue'].map(v => css.getPropertyValue(v).trim()), grid: css.getPropertyValue('--line').trim() };
-  if (state.ctx) { // rebuild the view in the new colours; the simulation and camera carry on
-    state.view3d = stage.show(VIEWS[state.view](state.ctx), true);
-    state.sim.tap = state.view3d.step;
-  }
+  if (state.ctx) showView(true); // rebuild the view in the new colours; the simulation and camera carry on
 }
 document.querySelectorAll('#looks button').forEach(b => { b.onclick = () => setLook(b.dataset.look); });
 let savedLook = null;

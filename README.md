@@ -20,6 +20,13 @@ Type a differential equation and watch it move. Holograph turns ODEs and PDEs in
 | 1D PDE (`u_t`, `u_tt`) | string or rod with its recent history |
 | 2D PDE | wireframe membrane or plate |
 
+In the view:
+
+- Drag to orbit, and use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move around.
+- **Click the graph** to pin a live readout of the value there. <kbd>Esc</kbd> clears it.
+- **2D** flattens the picture: a side view, top-down heatmap or flat phase portrait. The 3D trajectory has no 2D form, and the app says so.
+- **Look:** Hologram, Plain (no glow effects) or Light (light background).
+
 Press <kbd>Space</kbd> to pause and <kbd>R</kbd> to restart.
 
 ## Run locally

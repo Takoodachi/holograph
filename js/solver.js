@@ -130,5 +130,5 @@ export function pdeSim(model, P, { n, a, b, bc }, u0, v0) {
       for (const k of fixed) dX[k] = 0;
     }
   };
-  return Object.assign(new Sim(f, S, Infinity), { NX, NY, idx });
+  return Object.assign(new Sim(f, S, Infinity), { NX, NY, idx, x0: a, dx });
 }
