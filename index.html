@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
   <link rel="stylesheet" href="style.css">
   <script>try { document.documentElement.dataset.look = localStorage.getItem('holograph.look') || 'holo'; } catch {} /* before first paint: no dark flash for Light */</script>
   <script type="importmap">
@@ -25,6 +27,26 @@
 <body>
   <div class="layout-grid" aria-hidden="true"></div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- top right: view switch + Settings. Every user preference lives in the Settings popover. -->
+  <div class="top-right">
+    <div id="dims" class="seg dims" role="group" aria-label="View dimension">
+      <button data-flat="0" class="on" title="Free 3D view">3D</button>
+      <button data-flat="1" title="Flat 2D view, when the picture has one">2D</button>
+    </div>
+    <button class="settings-btn" popovertarget="settings" title="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+      <span>Settings</span>
+    </button>
+  </div>
+  <div id="settings" class="settings" popover aria-label="Settings">
+    <h2 class="label">Look</h2>
+    <div id="looks" class="seg">
+      <button data-look="holo" title="Glowing wireframe on black">Hologram</button>
+      <button data-look="plain" title="Same colours, no glow or glitch effects">Plain</button>
+      <button data-look="light" title="Dark lines on a light background">Light</button>
+    </div>
+  </div>
 
   <aside class="panel">
     <header class="brand">
@@ -45,15 +67,6 @@
     <section id="view-sec" hidden>
       <h2 class="label">Representation</h2>
       <div id="views" class="seg"></div>
-    </section>
-
-    <section>
-      <h2 class="label">Look</h2>
-      <div id="looks" class="seg">
-        <button data-look="holo" title="Glowing wireframe on black">Hologram</button>
-        <button data-look="plain" title="Same colours, no glow or glitch effects">Plain</button>
-        <button data-look="light" title="Dark lines on a light background">Light</button>
-      </div>
     </section>
 
     <section id="ic-sec">
@@ -106,10 +119,6 @@
       <span class="bar"></span>
       <span id="hud-kind"></span>
       <span id="hud-view" class="dim"></span>
-    </div>
-    <div id="dims" class="seg dims" role="group" aria-label="View dimension">
-      <button data-flat="0" class="on" title="Free 3D view">3D</button>
-      <button data-flat="1" title="Flat 2D view, when the picture has one">2D</button>
     </div>
     <div id="probe" class="probe mono" role="status" aria-live="off" hidden></div>
     <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>

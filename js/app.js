@@ -277,7 +277,8 @@ document.querySelectorAll('#dims button').forEach(b => {
 // Click (not drag) on the graph: a ripple spreads from that point and a live readout of the value there is pinned to it
 const canvas = $('#stage');
 let press = null;
-canvas.addEventListener('pointerdown', e => { press = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+// a click that only closes the Settings popover shouldn't also probe the graph
+canvas.addEventListener('pointerdown', e => { press = $('#settings').matches(':popover-open') ? null : { x: e.clientX, y: e.clientY, t: performance.now() }; });
 canvas.addEventListener('pointerup', e => {
   if (!press || !state.view3d || Math.hypot(e.clientX - press.x, e.clientY - press.y) > 5 || performance.now() - press.t > 500) return;
   state.probe = state.view3d.probe?.(stage.raycaster(e.clientX, e.clientY)) ?? null;

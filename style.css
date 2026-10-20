@@ -176,7 +176,7 @@ kbd { border: 1px solid var(--line-strong); padding: 0 5px; }
 #stage { display: block; width: 100%; height: 100%; touch-action: none; }
 
 .hud-top {
-  position: absolute; top: 26px; left: 32px; right: 150px;
+  position: absolute; top: 26px; left: 32px; right: 270px;
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; pointer-events: none;
 }
@@ -220,8 +220,21 @@ kbd { border: 1px solid var(--line-strong); padding: 0 5px; }
 }
 #scope { display: block; width: 100%; height: 130px; }
 
-.dims { position: absolute; top: 20px; right: 32px; }
+/* top right: 3D/2D switch + Settings */
+.top-right { position: fixed; top: 20px; right: 32px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .dims button { min-width: 44px; }
+.settings-btn {
+  display: flex; align-items: center; gap: 8px; height: 31px; padding: 0 12px;
+  border: 1px solid var(--line-strong); background: var(--panel); color: var(--dim);
+  font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; transition: 0.15s;
+}
+.settings-btn:hover, .top-right:has(+ .settings:popover-open) .settings-btn { color: var(--text); border-color: var(--accent); }
+.settings-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.settings {
+  position: fixed; inset: auto; top: 62px; right: 32px; margin: 0; width: 300px; padding: 18px 20px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line-strong);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
 
 /* live readout pinned to the clicked point: the dot sits on the point, the tag above it */
 .probe {
@@ -248,8 +261,10 @@ kbd { border: 1px solid var(--line-strong); padding: 0 5px; }
   .panel { top: 52vh; width: auto; right: 0; border-right: 0; border-top: 1px solid var(--line-strong); padding: 18px 16px 32px; }
   .viewport { bottom: 48vh; }
   .brand { margin-bottom: 14px; }
-  .hud-top { top: 16px; left: 16px; right: 120px; font-size: 10.5px; }
-  .dims { top: 10px; right: 16px; }
+  .hud-top { top: 16px; left: 16px; right: 170px; font-size: 10.5px; }
+  .top-right { top: 10px; right: 12px; }
+  .settings-btn span { display: none; }
+  .settings { top: 50px; right: 12px; width: min(300px, calc(100vw - 24px)); }
   .transport { left: 16px; bottom: 14px; gap: 10px; }
   .primary { min-width: 0; padding: 10px 16px; }
   #speeds, #rate, .scope { display: none; }

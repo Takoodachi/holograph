@@ -10,8 +10,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // Field colour ramps, rest → strong: dark looks go navy → slate → amber (positive) / blue (negative); light goes grey → amber / navy.
 // mesh: opacity of dense field meshes, which always blend normally: additively, thousands of overlapping lines burn out to white
+// ink: line opacity multiplier; dark ink on a light page needs far more than light lines glowing on black
 const HOLO = {
-  bg: 0x07080d, line: 0xdfe6f2, accent: 0xffd84a, blend: THREE.AdditiveBlending, fx: true, mesh: 0.8,
+  bg: 0x07080d, line: 0xdfe6f2, accent: 0xffd84a, blend: THREE.AdditiveBlending, fx: true, mesh: 0.8, ink: 1,
   pos: [[0.05, 0.07, 0.14], [0.16, 0.2, 0.3], [0.32, 0.34, 0.4], [0.6, 0.42, 0.08]],
   neg: [[0.05, 0.07, 0.14], [0.08, 0.15, 0.32], [0.14, 0.28, 0.55], [0.24, 0.42, 0.75]],
 };
@@ -19,7 +20,7 @@ export const LOOKS = {
   holo: HOLO,
   plain: { ...HOLO, fx: false },
   light: {
-    bg: 0xf4f5f8, line: 0x1b2233, accent: 0xb07800, blend: THREE.NormalBlending, fx: false, mesh: 0.9,
+    bg: 0xf4f5f8, line: 0x1b2233, accent: 0xb07800, blend: THREE.NormalBlending, fx: false, mesh: 0.9, ink: 2.2,
     pos: [[0.3, 0.34, 0.42], [0.55, 0.4, 0.15], [0.8, 0.45, 0.02], [0.45, 0.22, 0]],
     neg: [[0.3, 0.34, 0.42], [0.2, 0.32, 0.6], [0.08, 0.25, 0.7], [0.02, 0.08, 0.35]],
   },
@@ -145,7 +146,8 @@ export function createStage(canvas) {
       fog.color.set(T.bg);
       floorMat.uniforms.uLine.value.set(T.line);
       floorMat.uniforms.uAccent.value.set(T.accent);
-      Object.assign(paper.material, { blending: T.blend, needsUpdate: true }).color.set(T.line);
+      floorMat.uniforms.uInk.value = T.ink;
+      Object.assign(paper.material, { blending: T.blend, opacity: Math.min(1, 0.07 * T.ink), needsUpdate: true }).color.set(T.line);
       bloom.enabled = rgb.enabled = T.fx;
     },
     render(time) {
@@ -161,14 +163,14 @@ function floorMaterial() {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    uniforms: { uAge: { value: 100 }, uClick: { value: new THREE.Vector2() }, uLine: { value: new THREE.Color(T.line) }, uAccent: { value: new THREE.Color(T.accent) } },
+    uniforms: { uAge: { value: 100 }, uInk: { value: 1 }, uClick: { value: new THREE.Vector2() }, uLine: { value: new THREE.Color(T.line) }, uAccent: { value: new THREE.Color(T.accent) } },
     vertexShader: `varying vec3 vP;
       void main() { vec4 w = modelMatrix * vec4(position, 1.); vP = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
-    fragmentShader: `uniform float uAge; uniform vec2 uClick; uniform vec3 uLine, uAccent; varying vec3 vP;
+    fragmentShader: `uniform float uAge, uInk; uniform vec2 uClick; uniform vec3 uLine, uAccent; varying vec3 vP;
       float grid(vec2 p, float s) { vec2 q = p / s; vec2 g = abs(fract(q - .5) - .5) / fwidth(q); return 1. - min(min(g.x, g.y), 1.); }
       void main() {
         float fade = smoothstep(30., 3., length(vP.xz));
-        float minor = grid(vP.xz, 1.) * .07, major = grid(vP.xz, 5.) * .2;
+        float minor = grid(vP.xz, 1.) * .07 * uInk, major = grid(vP.xz, 5.) * .2 * uInk;
         float r = length(vP.xz - uClick);
         float ring = smoothstep(.5, 0., abs(r - uAge * 7.)) * smoothstep(1.3, .2, uAge) * smoothstep(9., 2., r);
         vec3 c = uLine * (minor + major) + uAccent * ring * (minor * 6. + major * 3. + .5);
@@ -180,7 +182,7 @@ function floorMaterial() {
 // ---------- building blocks ----------
 
 function lineMat(color = T.line, opacity = 0.5, vertexColors = false) {
-  return new THREE.LineBasicMaterial({ color, opacity, vertexColors, transparent: true, depthWrite: false, blending: T.blend });
+  return new THREE.LineBasicMaterial({ color, opacity: Math.min(1, opacity * T.ink), vertexColors, transparent: true, depthWrite: false, blending: T.blend });
 }
 const wire = (geo, color, opacity) => new THREE.LineSegments(new THREE.WireframeGeometry(geo), lineMat(color, opacity));
 const edges = (geo, color, opacity) => new THREE.LineSegments(new THREE.EdgesGeometry(geo), lineMat(color, opacity));
@@ -215,12 +217,14 @@ function heat(s, out, o) {
 }
 
 const half = (lo, hi, k) => Math.max((hi[k] - lo[k]) / 2, Math.abs(hi[k] + lo[k]) * 1e-3, 1e-6);
-const fmt = v => (Number.isFinite(v) ? String(+v.toPrecision(3)) : '–');
+// Display only: within a millionth of its natural scale a value is round-off or has decayed away, so it reads 0.
+// The simulation keeps the exact numbers; snapping them there would change the physics (decay, chaos, symmetry).
+const fmt = (v, scale) => (!Number.isFinite(v) ? '–' : Math.abs(v) <= 1e-6 * scale ? '0' : String(+v.toPrecision(3)));
 const clampIdx = (i, n) => Math.min(n - 1, Math.max(0, i));
 const UP = new THREE.Vector3(0, 1, 0), FRONT = new THREE.Vector3(0, 0, 1);
 const hitPlane = (rc, normal, at) => rc.ray.intersectPlane(new THREE.Plane(normal, -at), new THREE.Vector3());
 // ODE object views: a click pins a live readout of the whole state to the moving object
-const readout = (obj, labels) => () => S => ({ at: obj.position.toArray(), text: labels.map((l, k) => `${l} ${fmt(S[k])}`).join('   ') });
+const readout = (obj, { labels, lo, hi }) => () => S => ({ at: obj.position.toArray(), text: labels.map((l, k) => `${l} ${fmt(S[k], half(lo, hi, k))}`).join('   ') });
 
 // ---------- views ----------
 // (ctx) => (root) => { camera, update(S, t, dt), step?(S, t), flat?: {dir, center, w, h, hide?}, probe?(raycaster) → (S, t) => {at, text} }
@@ -242,7 +246,7 @@ export const VIEWS = {
     return {
       camera: [[1.5, 4.2, 12.5], [-0.8, 1.1, 0]],
       flat: { dir: 'front', center: [-1.5, 1.6, 0], w: 11.5, h: 4.5 },
-      probe: readout(mass, labels),
+      probe: readout(mass, { labels, lo, hi }),
       update(S) {
         const x = S[0] * s;
         mass.position.set(x, y0, 0);
@@ -256,7 +260,7 @@ export const VIEWS = {
     };
   },
 
-  pendulum: ({ labels }) => root => {
+  pendulum: ({ lo, hi, labels }) => root => {
     const L = 3.3, P = new THREE.Vector3(0, 4.7, 0);
     const bobGeo = new THREE.IcosahedronGeometry(0.42, 1);
     const bob = new THREE.Group().add(wire(bobGeo, T.accent, 0.6));
@@ -270,7 +274,7 @@ export const VIEWS = {
     return {
       camera: [[0, 3.4, 11.5], [0, 2.6, 0]],
       flat: { dir: 'front', center: [0, 4.6, 0], w: 7.8, h: 7.8 },
-      probe: readout(bob, labels),
+      probe: readout(bob, { labels, lo, hi }),
       update(S) {
         const p = at(S[0]);
         bob.position.set(...p);
@@ -298,7 +302,7 @@ export const VIEWS = {
     return {
       camera: [[5, 5.5, 9.5], [0, 2.4, 0]],
       flat: { dir: 'front', center: [0, 2.6, 0], w: 4.5, h: 6 },
-      probe: readout(ring, labels),
+      probe: readout(ring, { labels, lo, hi }),
       update(S) {
         const h = Math.max(0.005, ((S[0] - base) / span) * H);
         fluid.scale.y = h;
@@ -329,7 +333,7 @@ export const VIEWS = {
       arrows = new THREE.LineSegments(new THREE.BufferGeometry(), lineMat(0xffffff, 0.8, true));
       arrows.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * N * 6), 3));
       arrows.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * N * 6), 3));
-      dust = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: T.line, size: 0.06, transparent: true, opacity: 0.75, depthWrite: false, blending: T.blend }));
+      dust = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: T.line, size: 0.06, transparent: true, opacity: Math.min(1, 0.75 * T.ink), depthWrite: false, blending: T.blend }));
       // start scattered: all at the origin, they'd sit stacked on a fixed point there until their first respawn
       dust.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(M * 3).map((_, i) => (i % 3 === 1 ? 0.05 : (Math.random() - 0.5) * 12.5)), 3));
       dust.life = new Float32Array(M).map(() => Math.random() * 3);
@@ -346,8 +350,8 @@ export const VIEWS = {
         if (!hit || Math.abs(hit.x) > 6.3 || Math.abs(hit.z) > 6.3) return null;
         const va = A(hit.x), vb = B(hit.z);
         return (S, t) => {
-          let text = `${labels[a]} ${fmt(va)}   ${labels[b]} ${fmt(vb)}`;
-          if (field) { Y[a] = va; Y[b] = vb; field(P, t, Y, dY); text += `   flow (${fmt(dY[a])}, ${fmt(dY[b])})`; }
+          let text = `${labels[a]} ${fmt(va, half(lo, hi, a))}   ${labels[b]} ${fmt(vb, half(lo, hi, b))}`;
+          if (field) { Y[a] = va; Y[b] = vb; field(P, t, Y, dY); text += `   flow (${fmt(dY[a], half(lo, hi, a))}, ${fmt(dY[b], half(lo, hi, b))})`; }
           return { at: [hit.x, 0.05, hit.z], text };
         };
       },
@@ -363,7 +367,7 @@ export const VIEWS = {
         const top = Math.max(...mags.filter(Number.isFinite)) || 1;
         // fade from the background: faint where the flow is slow, strong where it is fast (tail in ink, head in accent)
         mags.forEach((m, i) => {
-          const k = 0.3 + 0.7 * Math.sqrt(Math.min(m / top, 1));
+          const k = Math.min(1, (0.3 + 0.7 * Math.sqrt(Math.min(m / top, 1))) * T.ink);
           c.set([bgC.r + (lnC.r - bgC.r) * k * 0.3, bgC.g + (lnC.g - bgC.g) * k * 0.3, bgC.b + (lnC.b - bgC.b) * k * 0.3,
             bgC.r + (acC.r - bgC.r) * k, bgC.g + (acC.g - bgC.g) * k, bgC.b + (acC.b - bgC.b) * k], i * 6);
         });
@@ -399,14 +403,14 @@ export const VIEWS = {
     return {
       camera: [[10, 7.5, 12], [0, 4, 0]],
       spin: true,
-      probe: readout(head, labels),
+      probe: readout(head, { labels, lo, hi }),
       update: S => head.position.set(...at(S)),
       step(S) { const p = at(S); all.push(...p); recent.push(...p); },
     };
   },
 
   profile: ({ sim, lo, hi, signed }) => root => {
-    const N = sim.NX, base = 2.4, X = i => -6 + (12 * i) / (N - 1), M = 72;
+    const N = sim.NX, base = 2.4, X = i => -6 + (12 * i) / (N - 1), M = 72, span = (sim.dx * (N - 1)) / 2;
     let amp = Math.max(Math.abs(lo), Math.abs(hi), 1e-6);
     const curve = dynLine(N, T.accent, 1);
     const strip = new THREE.Mesh(new THREE.PlaneGeometry(12, 0.9, N - 1, 1).rotateX(-Math.PI / 2),
@@ -424,7 +428,7 @@ export const VIEWS = {
         const hit = hitPlane(rc, FRONT, 0);
         if (!hit || Math.abs(hit.x) > 6.2) return null;
         const i = clampIdx(Math.round(((hit.x + 6) / 12) * (N - 1)), N);
-        return S => { const u = S[sim.idx(i, 0)]; return { at: [X(i), base + (u / amp) * 1.9, 0], text: `x ${fmt(sim.x0 + i * sim.dx)}   u ${fmt(u)}` }; };
+        return S => { const u = S[sim.idx(i, 0)]; return { at: [X(i), base + (u / amp) * 1.9, 0], text: `x ${fmt(sim.x0 + i * sim.dx, span)}   u ${fmt(u, amp)}` }; };
       },
       update(S, t, dt) {
         const pos = curve.geometry.attributes.position, col = strip.geometry.attributes.color.array;
@@ -450,7 +454,7 @@ export const VIEWS = {
   },
 
   surface: ({ sim, lo, hi, signed }) => root => {
-    const N = sim.NX, base = 1, X = i => -5 + (10 * i) / (N - 1);
+    const N = sim.NX, base = 1, X = i => -5 + (10 * i) / (N - 1), span = (sim.dx * (N - 1)) / 2;
     let amp = Math.max(Math.abs(lo), Math.abs(hi), 1e-6);
     const position = new THREE.BufferAttribute(new Float32Array(N * N * 3), 3), color = new THREE.BufferAttribute(new Float32Array(N * N * 3), 3);
     const lines = [], tris = [];
@@ -478,7 +482,7 @@ export const VIEWS = {
         const i = clampIdx(Math.round(((hit.x + 5) / 10) * (N - 1)), N), j = clampIdx(Math.round(((hit.z + 5) / 10) * (N - 1)), N);
         return S => {
           const u = S[sim.idx(i, j)];
-          return { at: [X(i), base + (u / amp) * 1.8, X(j)], text: `x ${fmt(sim.x0 + i * sim.dx)}   y ${fmt(sim.x0 + j * sim.dx)}   u ${fmt(u)}` };
+          return { at: [X(i), base + (u / amp) * 1.8, X(j)], text: `x ${fmt(sim.x0 + i * sim.dx, span)}   y ${fmt(sim.x0 + j * sim.dx, span)}   u ${fmt(u, amp)}` };
         };
       },
       update(S) {
