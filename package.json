@@ -1,0 +1,12 @@
+{
+  "name": "holograph",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve -l 5173 .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "mathjs": "15.2.0"
+  }
+}

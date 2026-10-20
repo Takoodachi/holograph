@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Holograph · Differential equations, made physical</title>
+  <meta name="description" content="Type an ODE or PDE and watch it move: springs, pendulums, orbits, strings, membranes and heat, rendered as holograms.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/",
+        "mathjs": "https://cdn.jsdelivr.net/npm/mathjs@15.2.0/+esm"
+      }
+    }
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathlive@0.110.0/mathlive.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="layout-grid" aria-hidden="true"></div>
+
+  <aside class="panel">
+    <header class="brand">
+      <svg class="mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M2 20 C 8 2, 14 2, 20 20 S 32 38, 38 20" /><circle cx="20" cy="20" r="17" /></svg>
+      <div>
+        <h1>Holograph</h1>
+        <p>Differential equations, made physical</p>
+      </div>
+    </header>
+
+    <section>
+      <h2 class="label">Equations</h2>
+      <div id="eqs"></div>
+      <button id="add-eq" class="link">+ Add equation <span>(for systems)</span></button>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="view-sec" hidden>
+      <h2 class="label">Representation</h2>
+      <div id="views" class="seg"></div>
+    </section>
+
+    <section id="ic-sec">
+      <h2 class="label">Initial conditions</h2>
+      <div id="ics"></div>
+    </section>
+
+    <section id="bc-sec" hidden>
+      <h2 class="label">Domain &amp; boundary</h2>
+      <div class="domain">
+        <span id="domain-label">x ∈</span>
+        <input id="dom-a" type="number" step="any" aria-label="Domain start">
+        <span>to</span>
+        <input id="dom-b" type="number" step="any" aria-label="Domain end">
+      </div>
+      <div id="bcs" class="seg">
+        <button data-bc="fixed" title="Dirichlet: the edges stay at their initial value">Fixed</button>
+        <button data-bc="free" title="Neumann: zero slope at the edges, nothing flows out">Free</button>
+        <button data-bc="periodic" title="Periodic: leaving one side re-enters the other">Periodic</button>
+      </div>
+    </section>
+
+    <section id="param-sec" hidden>
+      <h2 class="label">Parameters</h2>
+      <div id="params"></div>
+    </section>
+
+    <section>
+      <h2 class="label">Examples</h2>
+      <div id="examples" class="examples"></div>
+    </section>
+
+    <details class="help">
+      <summary>How to type equations</summary>
+      <dl>
+        <dt>Derivatives in time</dt><dd><code>y''</code>, <code>\dot{x}</code>, <code>\frac{dy}{dt}</code></dd>
+        <dt>Partial derivatives</dt><dd><code>u_t</code>, <code>u_xx</code>, <code>u_tt</code>, <code>\frac{\partial u}{\partial t}</code>, <code>\nabla^2 u</code></dd>
+        <dt>Systems</dt><dd>One equation per row, e.g. <code>x'=y</code> and <code>y'=-x</code></dd>
+        <dt>Parameters</dt><dd>Any other letter (<code>k</code>, <code>\omega</code>, <code>k_1</code>) becomes a slider</dd>
+        <dt>Functions</dt><dd><code>sin cos exp ln sqrt abs</code>, comparisons like <code>|x|&lt;0.3</code> for step shapes</dd>
+      </dl>
+      <p>Type plain text or paste LaTeX. Press <kbd>Space</kbd> to pause and <kbd>R</kbd> to restart.</p>
+    </details>
+  </aside>
+
+  <main class="viewport">
+    <canvas id="stage" aria-label="3D visualization of the solution"></canvas>
+    <div class="hud-top">
+      <span class="bar"></span>
+      <span id="hud-kind"></span>
+      <span id="hud-view" class="dim"></span>
+    </div>
+    <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+    <div class="transport">
+      <button id="reset" class="circle" aria-label="Restart from initial conditions" title="Restart (R)">
+        <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4" /></svg>
+      </button>
+      <button id="play" class="primary">Pause</button>
+      <div id="speeds" class="seg small" aria-label="Playback speed"></div>
+      <span id="clock" class="mono">t = 0.00</span>
+      <span id="rate" class="mono dim"></span>
+    </div>
+    <figure class="scope" id="scope-box">
+      <figcaption id="scope-legend" class="mono"></figcaption>
+      <canvas id="scope"></canvas>
+    </figure>
+  </main>
+</body>
+</html>
