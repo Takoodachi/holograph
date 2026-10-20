@@ -1,6 +1,6 @@
-import { analyze, compileExpr, GREEK } from './parse.js';
+import { analyze, compileExpr, GREEK, F } from './parse.js';
 import { odeSim, pdeSim, scan } from './solver.js';
-import { createStage, VIEWS, VIEW_NAMES } from './scene.js';
+import { createStage, VIEWS, VIEW_NAMES, LOOKS } from './scene.js';
 import { PRESETS } from './presets.js';
 
 await customElements.whenDefined('math-field');
@@ -21,12 +21,36 @@ const state = {
 };
 const stage = createStage($('#stage'));
 
+// MathLive's letter shortcuts silently rewrite input (xx → ×, uu → ∪, km → unit…). Keep only Greek and function names.
+const SHORTCUTS = new Set([...GREEK, 'pi', ...Object.keys(F), 'arcsin', 'arccos', 'arctan']);
+
 function mathField(latex, label, onInput) {
   const mf = document.createElement('math-field');
+  mf.addEventListener('mount', () => {
+    mf.inlineShortcuts = Object.fromEntries(Object.entries(mf.inlineShortcuts).filter(([k]) => !/[a-zA-Z]/.test(k) || SHORTCUTS.has(k)));
+  }, { once: true });
   mf.value = latex;
   mf.mathVirtualKeyboardPolicy = 'manual';
   mf.setAttribute('aria-label', label);
   mf.addEventListener('input', onInput);
+  mf.addEventListener('keydown', e => {
+    if (e.key.length !== 1 || /[a-zA-Z0-9]/.test(e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
+    // y'' as one ^{\prime\prime}, not two stacked superscripts
+    if (e.key === "'" && /\^\{(\\prime)+\}$/.test(mf.getValue(0, mf.position, 'latex'))) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      mf.executeCommand('moveToPreviousChar');
+      mf.insert('\\prime');
+      mf.executeCommand('moveAfterParent');
+      mf.dispatchEvent(new Event('input'));
+      return;
+    }
+    // Subscripts hold only letters and digits (as in Desmos): any other key first steps out, so u_xx= doesn't become u_{xx=}
+    const p = mf.position;
+    mf.executeCommand('moveAfterParent');
+    if (mf.position === p || !/_(\{[a-zA-Z0-9]*\}|[a-zA-Z0-9])$/.test(mf.getValue(0, mf.position, 'latex'))) mf.position = p;
+    else if (e.key === ' ') e.preventDefault();
+  }, true);
   return mf;
 }
 
@@ -34,6 +58,28 @@ function status(msg, err = false) {
   $('#status').textContent = msg;
   $('#status').classList.toggle('err', err);
 }
+
+// Virtual keyboard: one click outside it shows a hint, a second click (within 3 s) closes it
+let armed = false, disarm;
+addEventListener('pointerdown', e => {
+  const kb = window.mathVirtualKeyboard;
+  if (!kb?.visible) return;
+  const toast = $('#toast');
+  clearTimeout(disarm);
+  if (e.target.closest?.('.ML__keyboard, math-field')) {
+    armed = false;
+    toast.hidden = true;
+  } else if (armed) {
+    kb.hide();
+    armed = false;
+    toast.hidden = true;
+  } else {
+    armed = true;
+    toast.textContent = 'Click again to close the keyboard';
+    toast.hidden = false;
+    disarm = setTimeout(() => { armed = false; toast.hidden = true; }, 3000);
+  }
+}, true);
 
 // ---------- equations ----------
 const eqList = $('#eqs');
@@ -197,9 +243,7 @@ function reset() {
   state.trace = [];
   $('#scope-box').hidden = m.kind !== 'ode';
   if (m.kind === 'ode') $('#scope-legend').replaceChildren(...scopeComps(m).map((k, i) => {
-    const s = el('span', '', icSpecs(m)[k].label.replace('(0)', '(t)'));
-    s.style.color = SCOPE_COLORS[i];
-    return s;
+    return el('span', `s${i}`, icSpecs(m)[k].label.replace('(0)', '(t)'));
   }));
 }
 
@@ -229,7 +273,7 @@ addEventListener('keydown', e => {
 });
 
 // ---------- scope: the ODE's signals over the last 10 s ----------
-const SCOPE_COLORS = ['#ffd84a', '#dfe6f2', '#7fb8ff'];
+let scopeInk = { colors: [], grid: '' }; // read from the CSS theme in setLook()
 const scopeComps = m => (m.vars.length > 1 ? m.vars.map(v => m.state.indexOf(v)) : [0, 1].filter(k => k < m.state.length)).slice(0, 3);
 const scopeCanvas = $('#scope'), g2 = scopeCanvas.getContext('2d');
 
@@ -243,13 +287,13 @@ function drawScope(record) {
   if (scopeCanvas.width !== w * dpr) { scopeCanvas.width = w * dpr; scopeCanvas.height = h * dpr; }
   g2.setTransform(dpr, 0, 0, dpr, 0, 0);
   g2.clearRect(0, 0, w, h);
-  g2.strokeStyle = 'rgba(223,230,242,0.08)';
+  g2.strokeStyle = scopeInk.grid;
   g2.lineWidth = 1;
   for (let k = 1; k < 4; k++) { g2.beginPath(); g2.moveTo(0, (h * k) / 4); g2.lineTo(w, (h * k) / 4); g2.stroke(); }
   const span = 10, now = sim.t;
   comps.forEach((k, c) => {
     const lo = ctx.lo[k], hi = ctx.hi[k], mid = (lo + hi) / 2, half = Math.max((hi - lo) / 2, 1e-9) * 1.15;
-    g2.strokeStyle = SCOPE_COLORS[c];
+    g2.strokeStyle = scopeInk.colors[c];
     g2.globalAlpha = c ? 0.6 : 1;
     g2.beginPath();
     state.trace.forEach(([t, ...v], i) => {
@@ -288,6 +332,25 @@ function frame(now) {
   }
   stage.render(now / 1000);
 }
+
+// ---------- look: hologram / plain / light ----------
+function setLook(look) {
+  if (!LOOKS[look]) look = 'holo';
+  document.documentElement.dataset.look = look;
+  try { localStorage.setItem('holograph.look', look); } catch {}
+  document.querySelectorAll('#looks button').forEach(b => b.classList.toggle('on', b.dataset.look === look));
+  stage.setLook(look);
+  const css = getComputedStyle(document.documentElement);
+  scopeInk = { colors: ['--accent', '--text', '--blue'].map(v => css.getPropertyValue(v).trim()), grid: css.getPropertyValue('--line').trim() };
+  if (state.ctx) { // rebuild the view in the new colours; the simulation and camera carry on
+    state.view3d = stage.show(VIEWS[state.view](state.ctx), true);
+    state.sim.tap = state.view3d.step;
+  }
+}
+document.querySelectorAll('#looks button').forEach(b => { b.onclick = () => setLook(b.dataset.look); });
+let savedLook = null;
+try { savedLook = localStorage.getItem('holograph.look'); } catch {}
+setLook(savedLook);
 
 // ---------- examples ----------
 function load(p) {

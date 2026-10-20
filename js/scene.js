@@ -8,14 +8,29 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-const BG = 0x07080d, LINE = 0xdfe6f2, ACCENT = 0xffd84a;
+// Field colour ramps, rest → strong: dark looks go navy → white → yellow (positive) / ice blue (negative); light goes grey → amber / navy
+const HOLO = {
+  bg: 0x07080d, line: 0xdfe6f2, accent: 0xffd84a, blend: THREE.AdditiveBlending, fx: true,
+  pos: [[0.08, 0.11, 0.2], [0.42, 0.48, 0.62], [0.92, 0.94, 0.98], [1, 0.84, 0.25]],
+  neg: [[0.08, 0.11, 0.2], [0.2, 0.36, 0.6], [0.45, 0.72, 1], [0.8, 0.93, 1]],
+};
+export const LOOKS = {
+  holo: HOLO,
+  plain: { ...HOLO, fx: false },
+  light: {
+    bg: 0xf4f5f8, line: 0x1b2233, accent: 0xb07800, blend: THREE.NormalBlending, fx: false,
+    pos: [[0.3, 0.34, 0.42], [0.55, 0.4, 0.15], [0.8, 0.45, 0.02], [0.45, 0.22, 0]],
+    neg: [[0.3, 0.34, 0.42], [0.2, 0.32, 0.6], [0.08, 0.25, 0.7], [0.02, 0.08, 0.35]],
+  },
+};
+const T = { ...HOLO }; // current look; views read it when they're built
 
 export function createStage(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(BG);
-  scene.fog = new THREE.Fog(BG, 16, 42);
+  scene.background = new THREE.Color(T.bg);
+  scene.fog = new THREE.Fog(T.bg, 16, 42);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
   const controls = new OrbitControls(camera, canvas);
   Object.assign(controls, { enableDamping: true, maxPolarAngle: Math.PI * 0.495, minDistance: 3, maxDistance: 40, autoRotateSpeed: 0.6 });
@@ -29,7 +44,8 @@ export function createStage(canvas) {
 
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
-  composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.45, 0.12));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.55, 0.45, 0.12);
+  composer.addPass(bloom);
   const rgb = new ShaderPass(RGBShiftShader);
   rgb.uniforms.amount.value = 0.0011;
   composer.addPass(rgb);
@@ -47,14 +63,26 @@ export function createStage(canvas) {
 
   return {
     root,
-    show(view) {
+    show(view, keepCamera = false) {
       root.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });
       root.clear();
       const v = view(root);
-      camera.position.set(...v.camera[0]);
-      controls.target.set(...v.camera[1]);
+      if (!keepCamera) {
+        camera.position.set(...v.camera[0]);
+        controls.target.set(...v.camera[1]);
+      }
       controls.autoRotate = !!v.spin;
       return v;
+    },
+    // takes effect on the next show(): the caller rebuilds the view
+    setLook(name) {
+      Object.assign(T, LOOKS[name]);
+      scene.background.set(T.bg);
+      scene.fog.color.set(T.bg);
+      floorMat.uniforms.uLine.value.set(T.line);
+      floorMat.uniforms.uAccent.value.set(T.accent);
+      floorMat.uniforms.uPulse.value = +T.fx;
+      bloom.enabled = rgb.enabled = T.fx;
     },
     render(time) {
       floorMat.uniforms.uTime.value = time;
@@ -69,15 +97,15 @@ function floorMaterial() {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    uniforms: { uTime: { value: 0 }, uLine: { value: new THREE.Color(LINE) }, uAccent: { value: new THREE.Color(ACCENT) } },
+    uniforms: { uTime: { value: 0 }, uPulse: { value: 1 }, uLine: { value: new THREE.Color(T.line) }, uAccent: { value: new THREE.Color(T.accent) } },
     vertexShader: `varying vec3 vP;
       void main() { vec4 w = modelMatrix * vec4(position, 1.); vP = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
-    fragmentShader: `uniform float uTime; uniform vec3 uLine, uAccent; varying vec3 vP;
+    fragmentShader: `uniform float uTime, uPulse; uniform vec3 uLine, uAccent; varying vec3 vP;
       float grid(vec2 p, float s) { vec2 q = p / s; vec2 g = abs(fract(q - .5) - .5) / fwidth(q); return 1. - min(min(g.x, g.y), 1.); }
       void main() {
         float d = length(vP.xz), fade = smoothstep(30., 3., d);
         float minor = grid(vP.xz, 1.) * .07, major = grid(vP.xz, 5.) * .2;
-        float ring = smoothstep(.6, 0., abs(d - mod(uTime * 5., 45.)));
+        float ring = uPulse * smoothstep(.6, 0., abs(d - mod(uTime * 5., 45.)));
         vec3 c = uLine * (minor + major) + uAccent * ring * (minor * 5. + major * 2. + .03);
         gl_FragColor = vec4(c, (minor + major + ring * .25) * fade);
       }`,
@@ -86,11 +114,11 @@ function floorMaterial() {
 
 // ---------- building blocks ----------
 
-const lineMat = (color = LINE, opacity = 0.5, vertexColors = false) =>
-  new THREE.LineBasicMaterial({ color, opacity, vertexColors, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+const lineMat = (color = T.line, opacity = 0.5, vertexColors = false) =>
+  new THREE.LineBasicMaterial({ color, opacity, vertexColors, transparent: true, depthWrite: false, blending: T.blend });
 const wire = (geo, color, opacity) => new THREE.LineSegments(new THREE.WireframeGeometry(geo), lineMat(color, opacity));
 const edges = (geo, color, opacity) => new THREE.LineSegments(new THREE.EdgesGeometry(geo), lineMat(color, opacity));
-const segment = (a, b, color = LINE, opacity = 0.3) => new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a), new THREE.Vector3(...b)]), lineMat(color, opacity));
+const segment = (a, b, color = T.line, opacity = 0.3) => new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a), new THREE.Vector3(...b)]), lineMat(color, opacity));
 
 function dynLine(n, color, opacity, vertexColors = false) {
   const g = new THREE.BufferGeometry();
@@ -115,11 +143,8 @@ function trail(n, color, opacity) {
   return line;
 }
 
-// Field colour: dim navy at rest → white → yellow (positive) or ice blue (negative)
-const POS = [[0.08, 0.11, 0.2], [0.42, 0.48, 0.62], [0.92, 0.94, 0.98], [1, 0.84, 0.25]];
-const NEG = [[0.08, 0.11, 0.2], [0.2, 0.36, 0.6], [0.45, 0.72, 1], [0.8, 0.93, 1]];
 function heat(s, out, o) {
-  const ramp = s < 0 ? NEG : POS, v = Math.min(Math.abs(s), 1) * 3, i = Math.min(Math.floor(v), 2), f = v - i;
+  const ramp = s < 0 ? T.neg : T.pos, v = Math.min(Math.abs(s), 1) * 3, i = Math.min(Math.floor(v), 2), f = v - i;
   for (let c = 0; c < 3; c++) out[o + c] = ramp[i][c] + (ramp[i + 1][c] - ramp[i][c]) * f;
 }
 
@@ -133,11 +158,11 @@ export const VIEWS = {
   spring: ({ lo, hi }) => root => {
     const s = 3 / Math.max(Math.abs(lo[0]), Math.abs(hi[0]), 1e-6), wallX = -6.5, y0 = 0.7;
     const box = new THREE.BoxGeometry(1.4, 1.4, 1.4, 2, 2, 2);
-    const mass = new THREE.Group().add(wire(box, ACCENT, 0.45), edges(box, ACCENT, 1));
-    const coil = dynLine(420, LINE, 0.9);
-    const wall = wire(new THREE.BoxGeometry(0.4, 3, 3, 1, 5, 5), LINE, 0.25);
+    const mass = new THREE.Group().add(wire(box, T.accent, 0.45), edges(box, T.accent, 1));
+    const coil = dynLine(420, T.line, 0.9);
+    const wall = wire(new THREE.BoxGeometry(0.4, 3, 3, 1, 5, 5), T.line, 0.25);
     wall.position.set(wallX - 0.2, 1.5, 0);
-    const gate = edges(new THREE.PlaneGeometry(2.6, 2.6), ACCENT, 0.25);
+    const gate = edges(new THREE.PlaneGeometry(2.6, 2.6), T.accent, 0.25);
     gate.position.set(0, 1.3, 0);
     gate.rotation.y = Math.PI / 2;
     root.add(mass, coil, wall, gate, segment([wallX, 0.01, 1], [7, 0.01, 1]), segment([wallX, 0.01, -1], [7, 0.01, -1]));
@@ -159,13 +184,13 @@ export const VIEWS = {
   pendulum: () => root => {
     const L = 3.3, P = new THREE.Vector3(0, 4.7, 0);
     const bobGeo = new THREE.IcosahedronGeometry(0.42, 1);
-    const bob = new THREE.Group().add(wire(bobGeo, ACCENT, 0.6));
-    const rod = dynLine(2, LINE, 0.95), path = trail(140, ACCENT, 0.35);
-    const mount = wire(new THREE.BoxGeometry(2.4, 0.16, 0.7, 4, 1, 1), LINE, 0.35);
+    const bob = new THREE.Group().add(wire(bobGeo, T.accent, 0.6));
+    const rod = dynLine(2, T.line, 0.95), path = trail(140, T.accent, 0.35);
+    const mount = wire(new THREE.BoxGeometry(2.4, 0.16, 0.7, 4, 1, 1), T.line, 0.35);
     mount.position.copy(P).add(new THREE.Vector3(0, 0.08, 0));
-    const guide = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(new THREE.EllipseCurve(0, 0, L, L).getPoints(96)), lineMat(LINE, 0.1));
+    const guide = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(new THREE.EllipseCurve(0, 0, L, L).getPoints(96)), lineMat(T.line, 0.1));
     guide.position.copy(P);
-    root.add(bob, rod, path, mount, guide, segment([0, 0.01, 0], [0, P.y, 0], LINE, 0.08));
+    root.add(bob, rod, path, mount, guide, segment([0, 0.01, 0], [0, P.y, 0], T.line, 0.08));
     const at = th => [P.x + L * Math.sin(th), P.y - L * Math.cos(th), 0];
     return {
       camera: [[0, 3.4, 11.5], [0, 2.6, 0]],
@@ -181,15 +206,15 @@ export const VIEWS = {
 
   level: ({ lo, hi }) => root => {
     const H = 5, R = 1.5, base = Math.min(lo[0], 0), span = Math.max(hi[0], 0) - base || 1;
-    const tank = wire(new THREE.CylinderGeometry(R, R, H, 28, 10, true), LINE, 0.18);
+    const tank = wire(new THREE.CylinderGeometry(R, R, H, 28, 10, true), T.line, 0.18);
     tank.position.y = H / 2;
-    const fluid = wire(new THREE.CylinderGeometry(R * 0.93, R * 0.93, 1, 28, 1), ACCENT, 0.35);
-    const ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(new THREE.EllipseCurve(0, 0, R * 0.93, R * 0.93).getPoints(64)), lineMat(ACCENT, 1));
+    const fluid = wire(new THREE.CylinderGeometry(R * 0.93, R * 0.93, 1, 28, 1), T.accent, 0.35);
+    const ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(new THREE.EllipseCurve(0, 0, R * 0.93, R * 0.93).getPoints(64)), lineMat(T.accent, 1));
     ring.rotation.x = -Math.PI / 2;
     root.add(tank, fluid, ring);
     if (base < 0) {
       const zero = ring.clone();
-      zero.material = lineMat(LINE, 0.5);
+      zero.material = lineMat(T.line, 0.5);
       zero.position.y = (-base / span) * H;
       root.add(zero);
     }
@@ -210,20 +235,21 @@ export const VIEWS = {
     let sa = 5 / (half(lo, hi, a) * 1.25), sb = 5 / (half(lo, hi, b) * 1.25);
     if (coords.uniform) sa = sb = Math.min(sa, sb);
     const X = v => (v - ca) * sa, Z = v => -(v - cb) * sb, A = x => x / sa + ca, B = z => -z / sb + cb;
-    const path = trail(2500, ACCENT, 0.85);
-    const head = wire(new THREE.OctahedronGeometry(0.16), ACCENT, 1);
-    root.add(path, head, edges(new THREE.PlaneGeometry(12.5, 12.5).rotateX(-Math.PI / 2), LINE, 0.3));
-    if (lo[a] < 0 && hi[a] > 0) root.add(segment([X(0), 0.02, -6.25], [X(0), 0.02, 6.25], LINE, 0.25));
-    if (lo[b] < 0 && hi[b] > 0) root.add(segment([-6.25, 0.02, Z(0)], [6.25, 0.02, Z(0)], LINE, 0.25));
+    const path = trail(2500, T.accent, 0.85);
+    const head = wire(new THREE.OctahedronGeometry(0.16), T.accent, 1);
+    root.add(path, head, edges(new THREE.PlaneGeometry(12.5, 12.5).rotateX(-Math.PI / 2), T.line, 0.3));
+    if (lo[a] < 0 && hi[a] > 0) root.add(segment([X(0), 0.02, -6.25], [X(0), 0.02, 6.25], T.line, 0.25));
+    if (lo[b] < 0 && hi[b] > 0) root.add(segment([-6.25, 0.02, Z(0)], [6.25, 0.02, Z(0)], T.line, 0.25));
 
     // 2D state: draw the vector field and let dust flow along it
     let arrows, dust, Y = new Float64Array(2), dY = new Float64Array(2);
+    const bgC = new THREE.Color(T.bg), lnC = new THREE.Color(T.line), acC = new THREE.Color(T.accent);
     const N = 21, M = 700;
     if (field) {
       arrows = new THREE.LineSegments(new THREE.BufferGeometry(), lineMat(0xffffff, 0.8, true));
       arrows.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * N * 6), 3));
       arrows.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * N * 6), 3));
-      dust = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: LINE, size: 0.06, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending }));
+      dust = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: T.line, size: 0.06, transparent: true, opacity: 0.75, depthWrite: false, blending: T.blend }));
       dust.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(M * 3), 3));
       dust.life = new Float32Array(M).map(() => Math.random() * 3);
       root.add(arrows, dust);
@@ -242,7 +268,12 @@ export const VIEWS = {
           mags.push(m);
         }
         const top = Math.max(...mags.filter(Number.isFinite)) || 1;
-        mags.forEach((m, i) => { const k = 0.15 + 0.85 * Math.sqrt(Math.min(m / top, 1)); c.set([k * 0.25, k * 0.28, k * 0.35, k, k * 0.86, k * 0.4], i * 6); });
+        // fade from the background: faint where the flow is slow, strong where it is fast (tail in ink, head in accent)
+        mags.forEach((m, i) => {
+          const k = 0.3 + 0.7 * Math.sqrt(Math.min(m / top, 1));
+          c.set([bgC.r + (lnC.r - bgC.r) * k * 0.3, bgC.g + (lnC.g - bgC.g) * k * 0.3, bgC.b + (lnC.b - bgC.b) * k * 0.3,
+            bgC.r + (acC.r - bgC.r) * k, bgC.g + (acC.g - bgC.g) * k, bgC.b + (acC.b - bgC.b) * k], i * 6);
+        });
         arrows.geometry.attributes.position.needsUpdate = arrows.geometry.attributes.color.needsUpdate = true;
         const d = dust.geometry.attributes.position.array;
         for (let i = 0; i < M; i++) {
@@ -266,9 +297,9 @@ export const VIEWS = {
     const [a, b, c] = coords.attractor, ctr = k => (lo[k] + hi[k]) / 2;
     const s = 3.6 / Math.max(half(lo, hi, a), half(lo, hi, b), half(lo, hi, c));
     const at = S => [(S[a] - ctr(a)) * s, (S[c] - ctr(c)) * s + 4, (S[b] - ctr(b)) * s];
-    const all = trail(9000, LINE, 0.28), recent = trail(260, ACCENT, 1);
-    const head = wire(new THREE.OctahedronGeometry(0.14), ACCENT, 1);
-    const frame = edges(new THREE.BoxGeometry(2 * half(lo, hi, a) * s, 2 * half(lo, hi, c) * s, 2 * half(lo, hi, b) * s), LINE, 0.12);
+    const all = trail(9000, T.line, 0.28), recent = trail(260, T.accent, 1);
+    const head = wire(new THREE.OctahedronGeometry(0.14), T.accent, 1);
+    const frame = edges(new THREE.BoxGeometry(2 * half(lo, hi, a) * s, 2 * half(lo, hi, c) * s, 2 * half(lo, hi, b) * s), T.line, 0.12);
     frame.position.y = 4;
     root.add(all, recent, head, frame);
     return {
@@ -282,13 +313,13 @@ export const VIEWS = {
   profile: ({ sim, lo, hi, signed }) => root => {
     const N = sim.NX, base = 2.4, X = i => -6 + (12 * i) / (N - 1), M = 72;
     let amp = Math.max(Math.abs(lo), Math.abs(hi), 1e-6);
-    const curve = dynLine(N, ACCENT, 1);
+    const curve = dynLine(N, T.accent, 1);
     const strip = new THREE.Mesh(new THREE.PlaneGeometry(12, 0.9, N - 1, 1).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }));
+      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false, blending: T.blend }));
     strip.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(2 * N * 3), 3));
     strip.position.set(0, 0.02, 1.6);
-    const history = Array.from({ length: M }, (_, k) => { const l = dynLine(N, LINE, 0.32 * (1 - k / M) ** 1.5); l.position.z = -0.14 * (k + 1); return l; });
-    root.add(curve, strip, ...history, segment([-6, base, 0], [6, base, 0], LINE, 0.18), segment([-6, 0, 0], [-6, base, 0], LINE, 0.25), segment([6, 0, 0], [6, base, 0], LINE, 0.25));
+    const history = Array.from({ length: M }, (_, k) => { const l = dynLine(N, T.line, 0.32 * (1 - k / M) ** 1.5); l.position.z = -0.14 * (k + 1); return l; });
+    root.add(curve, strip, ...history, segment([-6, base, 0], [6, base, 0], T.line, 0.18), segment([-6, 0, 0], [-6, base, 0], T.line, 0.25), segment([6, 0, 0], [6, base, 0], T.line, 0.25));
     let frame = 0;
     return {
       camera: [[0, 6, 12.5], [0, 1.7, -3]],
@@ -330,9 +361,9 @@ export const VIEWS = {
     }
     const mk = idx => { const g = new THREE.BufferGeometry(); g.setAttribute('position', position); g.setAttribute('color', color); g.setIndex(idx); return g; };
     const mesh = new THREE.LineSegments(mk(lines), lineMat(0xffffff, 0.85, true));
-    const fill = new THREE.Mesh(mk(tris), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    const fill = new THREE.Mesh(mk(tris), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false, blending: T.blend }));
     mesh.frustumCulled = fill.frustumCulled = false;
-    root.add(mesh, fill, edges(new THREE.PlaneGeometry(10.4, 10.4).rotateX(-Math.PI / 2), LINE, 0.3));
+    root.add(mesh, fill, edges(new THREE.PlaneGeometry(10.4, 10.4).rotateX(-Math.PI / 2), T.line, 0.3));
     return {
       camera: [[9.5, 8, 10.5], [0, 0.6, 0]],
       update(S) {

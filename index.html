@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="style.css">
+  <script>try { document.documentElement.dataset.look = localStorage.getItem('holograph.look') || 'holo'; } catch {} /* before first paint: no dark flash for Light */</script>
   <script type="importmap">
     {
       "imports": {
@@ -23,6 +24,7 @@
 </head>
 <body>
   <div class="layout-grid" aria-hidden="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <aside class="panel">
     <header class="brand">
@@ -43,6 +45,15 @@
     <section id="view-sec" hidden>
       <h2 class="label">Representation</h2>
       <div id="views" class="seg"></div>
+    </section>
+
+    <section>
+      <h2 class="label">Look</h2>
+      <div id="looks" class="seg">
+        <button data-look="holo" title="Glowing wireframe on black">Hologram</button>
+        <button data-look="plain" title="Same colours, no glow or glitch effects">Plain</button>
+        <button data-look="light" title="Dark lines on a light background">Light</button>
+      </div>
     </section>
 
     <section id="ic-sec">
