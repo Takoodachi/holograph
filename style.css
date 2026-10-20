@@ -223,6 +223,19 @@ kbd { border: 1px solid var(--line-strong); padding: 0 5px; }
   position: absolute; right: 32px; bottom: 28px; margin: 0;
   width: 320px; border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--bg) 80%, transparent);
 }
+/* time axis view: tick labels pinned to 3D points, and the condense control */
+.axis-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.axis-label { position: absolute; transform: translate(-50%, -50%); font: 11px var(--mono); color: var(--dim); white-space: nowrap; }
+.axis-label.axis-name { color: var(--text); font: italic 15px 'Times New Roman', serif; }
+.timebox {
+  position: absolute; right: 32px; top: 66px; width: 300px; padding: 12px 14px;
+  border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--bg) 85%, transparent);
+}
+.timebox-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
+.timebox-head .mono { letter-spacing: 0; text-transform: none; color: var(--text); }
+.timebox-ends { display: flex; justify-content: space-between; color: var(--faint); }
+#time-reach { margin-top: 6px; }
+
 .s0 { color: var(--accent); }
 .s1 { color: var(--text); }
 .s2 { color: var(--blue); }

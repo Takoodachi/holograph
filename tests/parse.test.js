@@ -31,7 +31,7 @@ test('pendulum: Leibniz fraction, \\sin\\theta, \\frac{g}{L}', () => {
 
 test('logistic with \\left( \\right) and rP(...) as a product', () => {
   const m = analyze([String.raw`\frac{dP}{dt}=rP\left(1-\frac{P}{K}\right)`]);
-  assert.deepEqual(m.views, ['level']);
+  assert.deepEqual(m.views, ['level', 'timeline']);
   near(d(m, { r: 2, K: 10 }, 0, [4])[0], 2 * 4 * (1 - 0.4));
 });
 

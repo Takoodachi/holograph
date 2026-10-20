@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze } from '../js/parse.js';
-import { odeSim, pdeSim } from '../js/solver.js';
+import { odeSim, pdeSim, tau, untau, timeTicks, Lookahead } from '../js/solver.js';
 
 const run = (sim, T) => { while (sim.t < T - 1e-9) sim.advance(Math.min(1 / 60, T - sim.t), Infinity); };
 
@@ -35,4 +35,28 @@ test('periodic advection carries a bump once around the domain', () => {
   const sim = pdeSim(m, {}, { n: 200, a: -1, b: 1, bc: 'periodic' }, bump);
   run(sim, 2);
   assert.ok(Math.abs(sim.S[sim.idx(100, 0)] - 1) < 0.05, String(sim.S[sim.idx(100, 0)]));
+});
+
+test('condensed time axis: linear at c=0, [0,∞) at c=1, ticks spaced and ending at ∞', () => {
+  assert.equal(tau(20, 20, 0), 1);
+  assert.equal(tau(20, 20, 1), 0.5);
+  assert.equal(untau(1, 20, 1), Infinity);
+  assert.ok(Math.abs(untau(tau(37, 20, 0.7), 20, 0.7) - 37) < 1e-9);
+  const ticks = timeTicks(20, 1);
+  assert.equal(ticks.at(-1).t, Infinity);
+  ticks.slice(1).forEach((k, i) => assert.ok(k.s - ticks[i].s >= 0.08 - 1e-12, 'ticks overlap'));
+  assert.ok(timeTicks(20, 0).every(k => k.s <= 1 && k.t <= 20), 'linear window stops at W');
+});
+
+test('look-ahead: a damped oscillator settles to 0; an undamped one keeps a ±1 band far in the future', () => {
+  const damped = new Lookahead(odeSim(analyze(["y''+0.5y'+4y=0"]), {}, [1, 0]), S => [S[0]], 20, 2000);
+  damped.pump(Infinity);
+  const end = damped.rows.at(-1);
+  assert.ok(damped.done === 'done' && end.t >= 2000 - 1e-6, String(end.t));
+  assert.ok(Math.abs(end.v[0]) < 1e-6 && end.max[0] - end.min[0] < 1e-6);
+  assert.ok(damped.rows.length < 1000, `${damped.rows.length} samples`);
+  const free = new Lookahead(odeSim(analyze(["y''+4y=0"]), {}, [1, 0]), S => [S[0]], 20, 2000);
+  free.pump(Infinity);
+  const late = free.rows.at(-1);
+  assert.ok(late.min[0] < -0.99 && late.max[0] > 0.99, `${late.min[0]} … ${late.max[0]}`);
 });

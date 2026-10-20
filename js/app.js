@@ -1,6 +1,6 @@
 import { analyze, compileExpr, GREEK, F } from './parse.js';
-import { odeSim, pdeSim, scan } from './solver.js';
-import { createStage, VIEWS, VIEW_NAMES, LOOKS } from './scene.js';
+import { odeSim, pdeSim, scan, Lookahead, untau } from './solver.js';
+import { createStage, VIEWS, VIEW_NAMES, LOOKS, tickText } from './scene.js';
 import { PRESETS } from './presets.js';
 
 await customElements.whenDefined('math-field');
@@ -13,6 +13,8 @@ const el = (tag, cls, text) => Object.assign(document.createElement(tag), cls ? 
 const GREEK_CHARS = [...'αβγδεεζηθϑικλμνξρστυφφχψωΓΔΘΛΞΠΣΦΨΩ'];
 const glyph = n => GREEK_CHARS[GREEK.indexOf(n)] ?? n;
 const fmt = v => String(+v.toPrecision(4));
+const TIME_W = 20; // the time axis' linear window when not condensed
+let aheadTimer;
 
 const state = {
   model: null, view: null, sim: null, view3d: null, ctx: null, broken: false,
@@ -187,7 +189,11 @@ function renderParams(names) {
     Object.assign(num, { type: 'number', step: 'any', value: fmt(v) });
     slider.setAttribute('aria-label', `Parameter ${n}`);
     num.setAttribute('aria-label', `Parameter ${n} value`);
-    const set = x => { state.P[n] = x; if (state.sim) state.sim.frame = 0; }; // frame 0 → re-check the stable step size now
+    const set = x => {
+      state.P[n] = x;
+      if (state.sim) state.sim.frame = 0; // re-check the stable step size now
+      if (state.ahead) { clearTimeout(aheadTimer); aheadTimer = setTimeout(state.restartAhead, 250); }
+    };
     slider.oninput = () => { set(+slider.value); num.value = fmt(+slider.value); };
     num.onchange = () => {
       const x = parseFloat(num.value);
@@ -226,29 +232,54 @@ function reset() {
   renderParams([...new Set([...m.params, ...ics.params])]);
   const P = state.P;
 
+  state.ahead = null;
+  let makeAhead = null;
   if (m.kind === 'ode') {
     const Y0 = m.state.map(s => ics.fn[s](P));
     if (Y0.some(v => !Number.isFinite(v))) return status('Initial conditions must be finite numbers', true);
     const { lo, hi } = scan(m, P, Y0);
     state.sim = odeSim(m, P, Y0);
     state.ctx = { lo, hi, P, coords: m.coords, field: m.state.length === 2 ? m.deriv : null, labels: icSpecs(m).map(s => s.label.replace('(0)', '')) };
+    if (state.view === 'timeline') {
+      // a second copy runs ahead of the live one so the axis can show the far future
+      const comps = scopeComps(m), buf = comps.map(() => 0);
+      makeAhead = () => new Lookahead(odeSim(m, P, Y0), S => { comps.forEach((k, i) => { buf[i] = S[k]; }); return buf; }, TIME_W);
+      Object.assign(state.ctx, { comps, names: comps.map(k => state.ctx.labels[k]), tName: m.indep });
+    }
   } else {
-    const [a, b] = state.domain;
-    const sim = pdeSim(m, P, { n: m.dims === 2 ? 81 : 241, a, b, bc: state.bc }, (x, y) => ics.fn.u0(P, x, y), (x, y) => ics.fn.v0?.(P, x, y) ?? 0);
+    const [a, b] = state.domain, u0 = (x, y) => ics.fn.u0(P, x, y), v0 = (x, y) => ics.fn.v0?.(P, x, y) ?? 0;
+    const sim = pdeSim(m, P, { n: m.dims === 2 ? 81 : 241, a, b, bc: state.bc }, u0, v0);
     let lo = Infinity, hi = -Infinity;
     for (let j = 0; j < sim.NY; j++) for (let i = 0; i < sim.NX; i++) { const u = sim.S[sim.idx(i, j)]; lo = Math.min(lo, u); hi = Math.max(hi, u); }
     if (!Number.isFinite(lo + hi)) return status(`${glyph(m.u)}(x,0) is not finite everywhere on the domain`, true);
     if (hi - lo < 1e-9) { lo = Math.min(lo, -1); hi = Math.max(hi, 1); }
     state.sim = sim;
     state.ctx = { sim, lo, hi, signed: m.tOrder === 2 || lo < 0 };
+    if (state.view === 'timeline') {
+      // the look-ahead runs on a coarser grid: it only has to indicate the long run, and stiff PDEs get 4× longer stable steps
+      const grid = { n: m.dims === 2 ? 41 : 121, a, b, bc: state.bc }, NY = m.dims === 2 ? grid.n : 1, j = NY >> 1, buf = new Float64Array(grid.n);
+      makeAhead = () => {
+        const ahead = pdeSim(m, P, grid, u0, v0);
+        return new Lookahead(ahead, S => { for (let i = 0; i < ahead.NX; i++) buf[i] = S[ahead.idx(i, j)]; return buf; }, TIME_W);
+      };
+      const dx = (b - a) / (grid.bc === 'periodic' ? grid.n : grid.n - 1);
+      Object.assign(state.ctx, { xs: Array.from(buf, (_, i) => a + i * dx), tName: 't', note: m.dims === 2 ? `slice through y = ${fmt(a + j * dx)}` : '' });
+    }
   }
+  if (makeAhead) {
+    state.ahead = makeAhead();
+    Object.assign(state.ctx, { ahead: state.ahead, W: TIME_W, condense: () => +$('#condense').value });
+    // a parameter changed: the future computed ahead is stale, start it over (the live run carries on)
+    state.restartAhead = () => { state.ctx.ahead = state.ahead = makeAhead(); showView(true); };
+  }
+  $('#timebox').hidden = !state.ahead;
   state.broken = false;
   status(m.label);
   $('#hud-kind').textContent = m.label;
   $('#hud-view').textContent = VIEW_NAMES[state.view];
   showView();
   state.trace = [];
-  $('#scope-box').hidden = m.kind !== 'ode';
+  $('#scope-box').hidden = m.kind !== 'ode' || !!state.ahead; // the time axis view is already a time plot
   if (m.kind === 'ode') $('#scope-legend').replaceChildren(...scopeComps(m).map((k, i) => {
     return el('span', `s${i}`, icSpecs(m)[k].label.replace('(0)', '(t)'));
   }));
@@ -351,6 +382,17 @@ function drawScope(record) {
   g2.globalAlpha = 1;
 }
 
+// Axis labels the view asks for (tick values, axis names), pinned to their 3D points every frame
+function drawLabels() {
+  const want = state.view3d?.labels?.() ?? [], box = $('#labels');
+  while (box.children.length < want.length) box.append(el('span'));
+  [...box.children].forEach((node, i) => {
+    const l = want[i], at = l && stage.project(l.at);
+    node.hidden = !at;
+    if (at) Object.assign(node, { textContent: l.text, className: `axis-label ${l.cls ?? ''}` }).style.cssText = `left:${at.x}px;top:${at.y}px`;
+  });
+}
+
 // ---------- loop ----------
 let last = performance.now();
 function frame(now) {
@@ -376,6 +418,13 @@ function frame(now) {
     }
     $('#clock').textContent = `t = ${sim.t.toFixed(2)}`;
   }
+  if (state.ahead) {
+    state.ahead.pump(6);
+    const { done, rows } = state.ahead, reach = rows.at(-1)?.t ?? 0;
+    $('#time-window').textContent = `shows 0 – ${tickText(untau(1, TIME_W, +$('#condense').value))}`;
+    $('#time-reach').textContent = done === 'blew up' ? `blows up after t ≈ ${tickText(reach)}` : `computed to t = ${tickText(reach)}${done ? ' ✓' : ' …'}`;
+  }
+  drawLabels();
   const probe = state.probe && !state.broken ? state.probe(sim.S, sim.t) : null, at = probe && stage.project(probe.at), tag = $('#probe');
   tag.hidden = !at;
   if (at) Object.assign(tag, { textContent: probe.text }).style.cssText = `left:${at.x}px;top:${at.y}px`;

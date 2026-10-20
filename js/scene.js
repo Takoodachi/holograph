@@ -7,12 +7,13 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { tau, untau, timeTicks } from './solver.js';
 
 // Field colour ramps, rest → strong: dark looks go navy → slate → amber (positive) / blue (negative); light goes grey → amber / navy.
 // mesh: opacity of dense field meshes, which always blend normally: additively, thousands of overlapping lines burn out to white
 // ink: line opacity multiplier; dark ink on a light page needs far more than light lines glowing on black
 const HOLO = {
-  bg: 0x07080d, line: 0xdfe6f2, accent: 0xffd84a, blend: THREE.AdditiveBlending, fx: true, mesh: 0.8, ink: 1,
+  bg: 0x07080d, line: 0xdfe6f2, accent: 0xffd84a, blue: 0x7fb8ff, blend: THREE.AdditiveBlending, fx: true, mesh: 0.8, ink: 1,
   pos: [[0.05, 0.07, 0.14], [0.16, 0.2, 0.3], [0.32, 0.34, 0.4], [0.6, 0.42, 0.08]],
   neg: [[0.05, 0.07, 0.14], [0.08, 0.15, 0.32], [0.14, 0.28, 0.55], [0.24, 0.42, 0.75]],
 };
@@ -20,7 +21,7 @@ export const LOOKS = {
   holo: HOLO,
   plain: { ...HOLO, fx: false },
   light: {
-    bg: 0xf4f5f8, line: 0x1b2233, accent: 0xb07800, blend: THREE.NormalBlending, fx: false, mesh: 0.9, ink: 2.2,
+    bg: 0xf4f5f8, line: 0x1b2233, accent: 0xb07800, blue: 0x2f6fd6, blend: THREE.NormalBlending, fx: false, mesh: 0.9, ink: 2.2,
     pos: [[0.3, 0.34, 0.42], [0.55, 0.4, 0.15], [0.8, 0.45, 0.02], [0.45, 0.22, 0]],
     neg: [[0.3, 0.34, 0.42], [0.2, 0.32, 0.6], [0.08, 0.25, 0.7], [0.02, 0.08, 0.35]],
   },
@@ -85,6 +86,11 @@ export function createStage(canvas) {
       if (!keepCamera) {
         camera.position.set(...current.camera[0]);
         (flat ? target3D : controls.target).set(...current.camera[1]);
+        if (current.fit) { // back off along the view direction until `fit` world units span the width
+          const target = new THREE.Vector3(...current.camera[1]), off = camera.position.clone().sub(target);
+          const need = current.fit / 2 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect);
+          if (off.length() < need) camera.position.copy(target.add(off.setLength(need)));
+        }
       }
       controls.autoRotate = !flat && !!current.spin;
       return current;
@@ -229,9 +235,202 @@ const readout = (obj, { labels, lo, hi }) => () => S => ({ at: obj.position.toAr
 // ---------- views ----------
 // (ctx) => (root) => { camera, update(S, t, dt), step?(S, t), flat?: {dir, center, w, h, hide?}, probe?(raycaster) → (S, t) => {at, text} }
 
-export const VIEW_NAMES = { spring: 'Mass–spring', pendulum: 'Pendulum', level: 'Tank level', phase: 'Phase space', attractor: '3D trajectory', profile: 'String / rod', surface: 'Membrane / plate' };
+export const VIEW_NAMES = { spring: 'Mass–spring', pendulum: 'Pendulum', level: 'Tank level', phase: 'Phase space', attractor: '3D trajectory', profile: 'String / rod', surface: 'Membrane / plate', timeline: 'Time axis' };
+
+// ---------- time axis: the solution computed ahead (Lookahead rows) laid out on a condensable t axis ----------
+
+const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumSignificantDigits: 3 });
+export const tickText = t => (t === Infinity ? '∞' : compact.format(t));
+
+// index of the computed sample nearest to time t (rows are sorted by t)
+function rowAt(rows, t) {
+  let lo = 0, hi = rows.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (rows[mid].t <= t) lo = mid; else hi = mid - 1; }
+  return rows[lo + 1] && rows[lo + 1].t - t < t - rows[lo].t ? lo + 1 : lo;
+}
+
+// ODE: each plotted unknown against t, each in its own vertical range (like the scope).
+// Drawn at screen resolution, like an audio waveform: the axis is cut into bins holding the min/max of every sample
+// inside them. A bin whose motion (or jump from the previous bin) spans under 30% of the range is resolved and joins
+// the curve; a wider one is drawn as a faint bar between thin envelope lines. Fast motion packed into a few pixels so reads as a band between its
+// extremes, not as a glare of overlapping strokes.
+function odeTimeline({ ahead, W, condense, names, lo, hi, comps, tName }, root) {
+  const X = s => -6 + 12 * s, Y0 = 0.7, H = 4, MAX = 600, ink = [T.accent, T.line, T.blue];
+  const bmin = new Float64Array(MAX), bmax = new Float64Array(MAX);
+  // per unknown: the resolved curve, the band's envelope lines and its faint fill bars.
+  // Normal blending: a band is hundreds of overlapping strokes that would add up to a white glare.
+  const strokes = (k, n, opacity) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX * n * 3), 3));
+    const l = new THREE.LineSegments(g, Object.assign(lineMat(ink[k], opacity), { blending: THREE.NormalBlending }));
+    l.frustumCulled = false;
+    return l;
+  };
+  const curves = names.map((_, k) => [strokes(k, 2, k ? 0.75 : 1), strokes(k, 4, 0.4), strokes(k, 2, 0.045)]);
+  const ticks = new THREE.LineSegments(new THREE.BufferGeometry(), lineMat(T.line, 0.6));
+  ticks.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(40 * 6), 3));
+  ticks.frustumCulled = false;
+  const now = dynLine(2, T.accent, 0.45);
+  const rng = comps.map(k => [lo[k], hi[k]]);
+  let seen = 0, tickList = [];
+  root.add(...curves.flat(), ticks, now, segment([X(0), Y0 - 0.3, 0], [X(1), Y0 - 0.3, 0], T.line, 0.6),
+    edges(new THREE.PlaneGeometry(12, H + 0.5).translate(0, Y0 + H / 2, 0), T.line, 0.12));
+  const y = (k, v) => Y0 + ((v - rng[k][0]) / (rng[k][1] - rng[k][0] || 1)) * H;
+  const scale = k => Math.max((rng[k][1] - rng[k][0]) / 2, 1e-6);
+
+  return {
+    camera: [[0, 3.6, 16.5], [0, 2.6, 0]],
+    fit: 15, // the whole axis, 0 to ∞, stays in view on narrow screens
+    flat: { dir: 'front', center: [0, 2.5, 0], w: 14, h: 6.4 },
+    update(S, t) {
+      const c = condense(), rows = ahead.rows;
+      for (; seen < rows.length; seen++) rng.forEach((r, k) => { r[0] = Math.min(r[0], rows[seen].min[k]); r[1] = Math.max(r[1], rows[seen].max[k]); });
+      curves.forEach(([curve, env, bars], k) => {
+        const pc = curve.geometry.attributes.position.array, pe = env.geometry.attributes.position.array, pb = bars.geometry.attributes.position.array;
+        bmin.fill(Infinity);
+        bmax.fill(-Infinity);
+        for (const r of rows) {
+          const s = tau(r.t, W, c);
+          if (s > 1) break;
+          const j = Math.min(MAX - 1, Math.floor(s * MAX));
+          bmin[j] = Math.min(bmin[j], r.min[k]);
+          bmax[j] = Math.max(bmax[j], r.max[k]);
+        }
+        const wide = 0.3 * (rng[k][1] - rng[k][0]);
+        let nc = 0, ne = 0, nb = 0, prev = -1, prevBand = false;
+        for (let j = 0; j < MAX; j++) {
+          if (bmax[j] < bmin[j]) continue; // no sample landed in this bin
+          // unresolved: wide motion inside the bin, or a wide jump from the previous bin (the zigzag of a packed oscillation)
+          const x = X((j + 0.5) / MAX), xp = X((prev + 0.5) / MAX), mid = (bmin[j] + bmax[j]) / 2;
+          const band = bmax[j] - bmin[j] > wide || (prev >= 0 && Math.abs(mid - (bmin[prev] + bmax[prev]) / 2) > wide);
+          if (band) {
+            pb.set([x, y(k, bmin[j]), 0, x, y(k, bmax[j]), 0], nb++ * 6);
+            if (prevBand) pe.set([xp, y(k, bmin[prev]), 0, x, y(k, bmin[j]), 0, xp, y(k, bmax[prev]), 0, x, y(k, bmax[j]), 0], ne++ * 12);
+          } else if (prev >= 0) {
+            pc.set([xp, y(k, (bmin[prev] + bmax[prev]) / 2), 0, x, y(k, mid), 0], nc++ * 6);
+          }
+          prev = j;
+          prevBand = band;
+        }
+        curve.geometry.setDrawRange(0, nc * 2);
+        env.geometry.setDrawRange(0, ne * 4);
+        bars.geometry.setDrawRange(0, nb * 2);
+        for (const l of [curve, env, bars]) l.geometry.attributes.position.needsUpdate = true;
+      });
+      tickList = timeTicks(W, c);
+      const tp = ticks.geometry.attributes.position;
+      tickList.forEach(({ s }, i) => tp.array.set([X(s), Y0 - 0.3, 0, X(s), Y0 - 0.45, 0], i * 6));
+      ticks.geometry.setDrawRange(0, tickList.length * 2);
+      tp.needsUpdate = true;
+      const sn = X(Math.min(tau(t, W, c), 1));
+      now.geometry.attributes.position.array.set([sn, Y0 - 0.3, 0, sn, Y0 + H + 0.25, 0]);
+      now.geometry.attributes.position.needsUpdate = true;
+    },
+    labels: () => [
+      ...tickList.map(({ s, t }) => ({ at: [X(s), Y0 - 0.75, 0], text: tickText(t) })),
+      { at: [X(1) + 0.45, Y0 - 0.3, 0], text: tName, cls: 'axis-name' },
+      ...names.map((nm, k) => ({ at: [X(0) + 0.4 + k * 0.9, Y0 + H + 0.55, 0], text: nm, cls: `s${k}` })),
+    ],
+    probe(rc) {
+      const hit = hitPlane(rc, FRONT, 0);
+      if (!hit || Math.abs(hit.x) > 6.1) return null;
+      const s = (hit.x + 6) / 12;
+      return () => {
+        const rows = ahead.rows, c = condense(), tt = untau(s, W, c);
+        if (!rows.length || tt > rows.at(-1).t) return { at: [hit.x, Y0, 0], text: `${tName} ${tickText(tt)}   not computed yet` };
+        const r = rows[rowAt(rows, tt)];
+        // a range only for a real band (motion faster than the samples there), else the value
+        const vals = names.map((nm, k) => (r.max[k] - r.min[k] > 0.1 * scale(k)
+          ? `${nm} ${fmt(r.min[k], scale(k))} … ${fmt(r.max[k], scale(k))}` : `${nm} ${fmt(r.v[k], scale(k))}`));
+        return { at: [X(Math.min(tau(r.t, W, c), 1)), y(0, r.v[0]), 0], text: `${tName} ${fmt(r.t, W)}   ${vals.join('   ')}` };
+      };
+    },
+  };
+}
+
+// PDE: a space-time surface u(x, t), x across and condensed t running into the depth (a 2D PDE shows its middle slice)
+function pdeTimeline({ ahead, W, condense, xs, lo, hi, signed, tName, note }, root) {
+  const n = xs.length, M = 160, base = 0.6, X = i => -6 + (12 * i) / (n - 1), Z = s => 4 - 12 * s, span = (xs.at(-1) - xs[0]) / 2;
+  let amp = Math.max(Math.abs(lo), Math.abs(hi), 1e-6);
+  const position = new THREE.BufferAttribute(new Float32Array(n * M * 3), 3), color = new THREE.BufferAttribute(new Float32Array(n * M * 3), 3);
+  // indices grouped by t column, so the draw range can stop at the last computed column
+  const lines = [], tris = [], lineEnd = [], triEnd = [];
+  for (let j = 0; j < M; j++) {
+    for (let i = 0; i < n - 1; i++) lines.push(j * n + i, j * n + i + 1);
+    if (j) {
+      for (let i = 0; i < n; i += 4) lines.push((j - 1) * n + i, j * n + i);
+      for (let i = 0; i < n - 1; i++) { const a = (j - 1) * n + i, b = j * n + i; tris.push(a, a + 1, b, a + 1, b + 1, b); }
+    }
+    lineEnd.push(lines.length);
+    triEnd.push(tris.length);
+  }
+  const mk = idx => { const g = new THREE.BufferGeometry(); g.setAttribute('position', position); g.setAttribute('color', color); g.setIndex(idx); return g; };
+  const mesh = new THREE.LineSegments(mk(lines), Object.assign(lineMat(0xffffff, T.mesh, true), { blending: THREE.NormalBlending }));
+  const fill = new THREE.Mesh(mk(tris), new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+  mesh.frustumCulled = fill.frustumCulled = false;
+  const ticks = new THREE.LineSegments(new THREE.BufferGeometry(), lineMat(T.line, 0.6));
+  ticks.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(40 * 6), 3));
+  ticks.frustumCulled = false;
+  const now = dynLine(2, T.accent, 0.8);
+  root.add(mesh, fill, ticks, now, segment([-6.6, 0.02, Z(0)], [-6.6, 0.02, Z(1)], T.line, 0.6));
+  let tickList = [];
+
+  return {
+    camera: [[11, 8, 11], [0, 0.6, -2]],
+    fit: 17,
+    flat: { dir: 'top', center: [0, base, -2], w: 15, h: 13.5 },
+    update(S, t) {
+      const c = condense(), rows = ahead.rows, horizon = rows.at(-1)?.t ?? -1;
+      let jMax = -1, peak = 0;
+      for (let j = 0; j < M; j++) {
+        const tt = untau(j / (M - 1), W, c);
+        if (tt > horizon) break;
+        jMax = j;
+        const r = rows[rowAt(rows, tt)];
+        for (let i = 0; i < n; i++) {
+          const u = r.v[i], k = j * n + i;
+          peak = Math.max(peak, Math.abs(u));
+          position.setXYZ(k, X(i), base + (u / amp) * 1.6, Z(j / (M - 1)));
+          heat(signed ? u / amp : (u - lo) / (Math.max(hi, amp) - lo || 1), color.array, k * 3);
+        }
+      }
+      if (peak > amp * 1.2) amp += (peak - amp) * 0.1;
+      mesh.geometry.setDrawRange(0, jMax < 0 ? 0 : lineEnd[jMax]);
+      fill.geometry.setDrawRange(0, jMax < 0 ? 0 : triEnd[jMax]);
+      position.needsUpdate = color.needsUpdate = true;
+      tickList = timeTicks(W, c);
+      const tp = ticks.geometry.attributes.position;
+      tickList.forEach(({ s }, i) => tp.array.set([-6.6, 0.02, Z(s), -6.95, 0.02, Z(s)], i * 6));
+      ticks.geometry.setDrawRange(0, tickList.length * 2);
+      tp.needsUpdate = true;
+      const zn = Z(Math.min(tau(t, W, c), 1));
+      now.geometry.attributes.position.array.set([-6, base, zn, 6, base, zn]);
+      now.geometry.attributes.position.needsUpdate = true;
+    },
+    labels: () => [
+      ...tickList.map(({ s, t }) => ({ at: [-7.5, 0.02, Z(s)], text: tickText(t) })),
+      { at: [-6.6, 0.02, Z(1) - 0.7], text: tName, cls: 'axis-name' },
+      { at: [6.5, 0.02, Z(0) + 0.5], text: 'x', cls: 'axis-name' },
+      ...(note ? [{ at: [0, 0.02, Z(0) + 0.9], text: note }] : []),
+    ],
+    probe(rc) {
+      fill.geometry.computeBoundingSphere();
+      const hit = rc.intersectObject(fill)[0]?.point ?? hitPlane(rc, UP, base);
+      if (!hit || Math.abs(hit.x) > 6.1 || hit.z > Z(0) + 0.1 || hit.z < Z(1) - 0.1) return null;
+      const i = clampIdx(Math.round(((hit.x + 6) / 12) * (n - 1)), n), s = Math.max(0, (Z(0) - hit.z) / 12);
+      return () => {
+        const rows = ahead.rows, c = condense(), tt = untau(s, W, c);
+        if (!rows.length || tt > rows.at(-1).t) return { at: [X(i), base, hit.z], text: `x ${fmt(xs[i], span)}   ${tName} ${tickText(tt)}   not computed yet` };
+        const r = rows[rowAt(rows, tt)], u = r.v[i];
+        return { at: [X(i), base + (u / amp) * 1.6, Z(Math.min(tau(r.t, W, c), 1))], text: `x ${fmt(xs[i], span)}   ${tName} ${fmt(r.t, W)}   u ${fmt(u, amp)}` };
+      };
+    },
+  };
+}
 
 export const VIEWS = {
+  timeline: ctx => root => (ctx.xs ? pdeTimeline : odeTimeline)(ctx, root),
+
   spring: ({ lo, hi, labels }) => root => {
     const s = 3 / Math.max(Math.abs(lo[0]), Math.abs(hi[0]), 1e-6), wallX = -6.5, y0 = 0.7;
     const box = new THREE.BoxGeometry(1.4, 1.4, 1.4, 2, 2, 2);

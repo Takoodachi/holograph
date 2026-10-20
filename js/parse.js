@@ -298,6 +298,7 @@ function ode(eqs, ders, indep) {
   if (n === 1) views.push('level');
   if (n >= 2) views.push('phase');
   if (n >= 3) views[vars.length === 3 || (vars.length === 1 && n === 3) ? 'unshift' : 'push']('attractor');
+  views.push('timeline');
 
   const ord = ['', '1st', '2nd', '3rd'][Math.max(...Object.values(order))] ?? `${Math.max(...Object.values(order))}th`;
   return {
@@ -349,7 +350,7 @@ for (let j = 0; j < ${g.NY}; j++) {
   const kind = tOrder === 2 ? 'wave-type' : space.some(w => w.length % 2 === 0) ? 'diffusion-type' : 'transport-type';
   return {
     kind: 'pde', u, tOrder, dims, space, params, kernel,
-    views: [dims === 2 ? 'surface' : 'profile'],
+    views: [dims === 2 ? 'surface' : 'profile', 'timeline'],
     label: `PDE · ${kind} · ${u}(${dims === 2 ? 'x,y' : 'x'},t)`,
   };
 }

@@ -80,6 +80,55 @@ export function scan(model, P, Y0, T = 40, maxSteps = 20000) {
   return { lo, hi };
 }
 
+// ---------- condensed time axis ----------
+// Axis position s = u / (1 + c·u), u = t/W. c = 0: a linear window [0, W]. c = 1: all of [0, ∞) squeezed onto [0, 1).
+export const tau = (t, W, c) => t / W / (1 + (c * t) / W);
+export const untau = (s, W, c) => (c * s >= 1 ? Infinity : (W * s) / (1 - c * s));
+
+// "Nice" times (1, 2, 5 × 10^k) at least `gap` apart on the axis, plus ∞ at the end when fully condensed
+export function timeTicks(W, c, gap = 0.08) {
+  const out = [{ s: 0, t: 0 }];
+  for (let e = -2; e <= 6; e++) {
+    for (const m of [1, 2, 5]) {
+      const t = m * 10 ** e, s = tau(t, W, c);
+      if (s <= 1 && s - out.at(-1).s >= gap && (c < 1 || 1 - s >= gap)) out.push({ s, t });
+    }
+  }
+  if (c >= 1) out.push({ s: 1, t: Infinity });
+  return out;
+}
+
+// Runs its own copy of a simulation ahead in time, a few ms per call. Sample k+1 is taken W(1 + t/W)²/800 after
+// sample k, so even fully condensed the axis gets ~800 evenly spread samples. Each sample keeps the values then and
+// their min/max since the previous sample: a motion too fast to resolve that late still shows as a band.
+export class Lookahead {
+  constructor(sim, read, W, tMax = W * 500) {
+    Object.assign(this, { sim, read, W, tMax, rows: [], next: 0, min: null, max: null, done: '' });
+    sim.tap = (S, t) => this.record(S, t);
+    this.record(sim.S, 0);
+  }
+  record(S, t) {
+    const v = this.read(S);
+    if (!v.every(Number.isFinite)) return; // blowing up: keep what was sane, pump() stops
+    if (!this.min) { this.min = Float64Array.from(v); this.max = Float64Array.from(v); }
+    else for (let i = 0; i < v.length; i++) { if (v[i] < this.min[i]) this.min[i] = v[i]; if (v[i] > this.max[i]) this.max[i] = v[i]; }
+    if (t < this.next) return;
+    this.rows.push({ t, v: Float64Array.from(v), min: this.min, max: this.max });
+    this.min = this.max = null;
+    this.next = t + (this.W * (1 + t / this.W) ** 2) / 800;
+  }
+  pump(budgetMs) {
+    if (this.done) return;
+    const reached = this.sim.advance(this.tMax - this.sim.t, budgetMs) >= 1;
+    if (!this.sim.finite()) this.done = 'blew up';
+    else if (reached) {
+      this.done = 'done';
+      this.next = 0; // close with the final state; the regular schedule may have stepped past the end
+      this.record(this.sim.S, this.sim.t);
+    }
+  }
+}
+
 // Grid padded with 2 ghost cells per side; ghosts encode the boundary condition.
 function fillGhosts(U, g, bc) {
   const { NX, NY, W, GY } = g;

@@ -121,7 +121,14 @@
       <span id="hud-kind"></span>
       <span id="hud-view" class="dim"></span>
     </div>
+    <div id="labels" class="axis-labels" aria-hidden="true"></div>
     <div id="probe" class="probe mono" role="status" aria-live="off" hidden></div>
+    <div id="timebox" class="timebox" hidden>
+      <div class="timebox-head"><span>Time axis</span><span id="time-window" class="mono"></span></div>
+      <input id="condense" type="range" min="0" max="1" step="0.01" value="1" aria-label="Condense the time axis, from a linear window to all of time up to infinity">
+      <div class="timebox-ends mono"><span>linear</span><span>condensed to ∞</span></div>
+      <div id="time-reach" class="mono dim"></div>
+    </div>
     <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
     <div class="transport">
       <button id="reset" class="circle" aria-label="Restart from initial conditions" title="Restart (R)">

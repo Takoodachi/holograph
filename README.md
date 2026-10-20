@@ -19,6 +19,9 @@ Type a differential equation and watch it move. Holograph turns ODEs and PDEs in
 | 3 unknowns | 3D trajectory |
 | 1D PDE (`u_t`, `u_tt`) | string or rod with its recent history |
 | 2D PDE | wireframe membrane or plate |
+| any equation | **Time axis**: the solution against t, computed ahead into the far future |
+
+The Time axis view runs a second copy of the simulation ahead of the live one. Its **condense** slider goes from a linear window (t from 0 to 20) to all of time squeezed onto the axis, with ∞ at the end. A motion that keeps going forever, like a limit cycle or chaos, shows as a band between its extremes; one that settles shows as a flat line. ODEs plot each unknown against t; PDEs show a space-time surface u(x, t), or the middle slice for 2D problems.
 
 In the view:
 
