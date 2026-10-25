@@ -3,7 +3,7 @@ import { odeSim, pdeSim, scan, Lookahead, untau } from './solver.js';
 import { createStage, VIEWS, VIEW_NAMES, LOOKS, tickText } from './scene.js';
 import { PRESETS } from './presets.js';
 import { describe, DESCRIBE_HINTS } from './describe.js';
-import { buildWithClaude } from './claude.js';
+import { buildWithAI, PROVIDERS } from './ai.js';
 
 await customElements.whenDefined('math-field');
 // MathLive guesses asset paths from its script URL, which is wrong for the root-level CDN build
@@ -527,43 +527,51 @@ $('#examples').replaceChildren(...PRESETS.flatMap((p, i) => {
 }));
 
 // ---------- describe a system in words → equations, loaded like an example ----------
-// The built-in reader goes first; Claude (with the user's own key from Settings) takes what it can't place.
-let claudeKey = '';
-try { claudeKey = localStorage.getItem('holograph.claudeKey') || ''; } catch {}
-$('#claude-key').value = claudeKey;
-$('#claude-key').oninput = e => {
-  claudeKey = e.target.value.trim();
-  try { if (claudeKey) localStorage.setItem('holograph.claudeKey', claudeKey); else localStorage.removeItem('holograph.claudeKey'); } catch {}
-};
+// The built-in reader goes first; the AI chosen in Settings (with the user's own key for it) takes what it can't place.
+const saved = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
+const save = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch {} };
+let provider, aiKey;
+function setProvider(id) {
+  provider = PROVIDERS[id] ? id : 'anthropic';
+  aiKey = saved(`holograph.key.${provider}`); // one key per provider, so switching back finds it again
+  save('holograph.ai', provider);
+  Object.assign($('#ai-key'), { value: aiKey, placeholder: `${PROVIDERS[provider].company} API key` });
+  $('#ai-key-link').href = PROVIDERS[provider].keyUrl;
+  document.querySelectorAll('#ai-provider button').forEach(b => b.classList.toggle('on', b.dataset.ai === provider));
+}
+document.querySelectorAll('#ai-provider button').forEach(b => { b.onclick = () => setProvider(b.dataset.ai); });
+$('#ai-key').oninput = e => { aiKey = e.target.value.trim(); save(`holograph.key.${provider}`, aiKey); };
+setProvider(saved('holograph.ai'));
+
 const note = (cls, ...parts) => { $('#describe-note').className = `describe-note ${cls}`; $('#describe-note').replaceChildren(...parts); };
 const hint = (text, onclick) => Object.assign(el('button', 'hint', text), { type: 'button', onclick });
 const openSettings = () => $('#settings').showPopover();
-const aiTag = () => el('span', 'ai-tag', 'Claude');
 
 function buildFromWords(text) {
   const p = text.trim() && describe(text);
   if (!p) {
-    if (text.trim() && claudeKey) return buildWithAI(text);
+    if (text.trim() && aiKey) return askAI(text);
     note('err', text.trim() ? "Couldn't tell which system that is. Try: " : 'Try: ', ...DESCRIBE_HINTS.slice(0, 3).flatMap((h, i) => {
       const b = hint(h, () => { $('#describe-text').value = h; buildFromWords(h); });
       return i ? [' · ', b] : [b];
-    }), ...(text.trim() ? ['. Or add an Anthropic API key in ', hint('Settings', openSettings), ' and Claude will try it.'] : []));
+    }), ...(text.trim() ? ['. Or add an API key for Claude, GPT or Gemini in ', hint('Settings', openSettings), ' and AI will try it.'] : []));
     return;
   }
   load(p);
-  note('', `Built: ${[p.name, ...p.notes].join(' · ')}. Edit the equation below to refine it.`, ...(claudeKey ? [' ', hint('Ask Claude instead', () => buildWithAI(text))] : []));
+  note('', `Built: ${[p.name, ...p.notes].join(' · ')}. Edit the equation below to refine it.`,
+    ...(aiKey ? [' ', hint(`Ask ${PROVIDERS[provider].name} instead`, () => askAI(text))] : []));
 }
 
-async function buildWithAI(text) {
-  const go = $('.describe-go');
+async function askAI(text) {
+  const go = $('.describe-go'), { name } = PROVIDERS[provider], tag = () => el('span', 'ai-tag', name);
   go.disabled = true; // a disabled default button also stops Enter from submitting again
-  note('busy', aiTag(), 'Asking Claude to build it. This takes 10–30 seconds…');
+  note('busy', tag(), `Asking ${name} to build it. This takes 10–30 seconds…`);
   try {
-    const p = await buildWithClaude(text, { apiKey: claudeKey });
+    const p = await buildWithAI(text, { provider, apiKey: aiKey });
     load(p);
-    note('', aiTag(), `Built by Claude: ${[p.name, ...p.notes].join(' · ')}. AI can be wrong, so check the equations below.`);
+    note('', tag(), `Built by ${name}: ${[p.name, ...p.notes].join(' · ')}. AI can be wrong, so check the equations below.`);
   } catch (e) {
-    note('err', aiTag(), e.message, ...(/API key/.test(e.message) ? [' ', hint('Open Settings', openSettings)] : []));
+    note('err', tag(), e.message, ...(/API key/.test(e.message) ? [' ', hint('Open Settings', openSettings)] : []));
   } finally {
     go.disabled = false;
   }

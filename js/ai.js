@@ -1,10 +1,20 @@
-// Optional Claude mode for "Describe it": free-form descriptions the built-in reader (describe.js) can't place.
-// Runs in the browser with the user's own Anthropic key; the page has no server. Claude's answer is untrusted, so it
-// goes through the same parser as typed equations before the app loads it, with one retry that shows Claude the error.
+// Optional AI mode for "Describe it": free-form descriptions the built-in reader (describe.js) can't place.
+// Runs in the browser with the user's own key for the chosen provider; the page has no server. The model's answer is
+// untrusted, so it goes through the same parser as typed equations before the app loads it, with one retry that shows
+// the model the error.
 import { analyze, compileExpr } from './parse.js';
 import { PRESETS } from './presets.js';
 
-export const MODEL = 'claude-opus-5-5';
+// Claude goes through Anthropic's SDK; GPT and Gemini share the Chat Completions format (Gemini's OpenAI-compatible
+// endpoint), so another OpenAI-compatible provider is one more entry here
+export const PROVIDERS = {
+  anthropic: { name: 'Claude', company: 'Anthropic', model: 'claude-opus-5-5', keyUrl: 'https://console.anthropic.com/settings/keys', ask: askClaude },
+  openai: { name: 'GPT', company: 'OpenAI', model: 'gpt-6-astra', keyUrl: 'https://platform.openai.com/api-keys', ask: askChat, url: 'https://api.openai.com/v1/chat/completions' },
+  gemini: {
+    name: 'Gemini', company: 'Google', model: 'gemini-4-argon', keyUrl: 'https://aistudio.google.com/apikey', ask: askChat,
+    url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+  },
+};
 
 const EXAMPLES = ['Damped spring', 'Double pendulum', "Newton's cooling", 'Plucked string', 'Turing patterns', 'Steady heat (Laplace)', 'KdV solitons']
   .map(name => { const { group, ...p } = PRESETS.find(x => x.name === name); return p; });
@@ -17,7 +27,7 @@ Answer with the JSON schema you are given:
 - eqs: the equations, one per entry, in LaTeX as MathLive writes it.
 - params: a value for every parameter the equations and initial conditions use, and nothing else.
 - ic: starting values, keyed by state name (see below).
-- bc, domain: PDEs only. view: optional.
+- bc, domain: PDEs only; null for ODEs. view: null lets the app choose.
 
 How the app reads LaTeX:
 - Time is t. Time derivatives: \dot{x}, \ddot{x}, x', x'', \frac{dx}{dt}, \frac{d^2x}{dt^2}.
@@ -37,7 +47,7 @@ PDEs:
 - domain: [start, end] for x (and y: 2D is square). Default [-1, 1]. The grid has 241 points in 1D and 81×81 in 2D, so keep features wider than about 1/40 of the domain.
 - bc: "fixed" (edges keep their starting values), "free" (zero slope at the edges, insulated) or "periodic".
 
-Views (pick one that fits, or omit and the app chooses):
+Views (pick one that fits, or null and the app chooses):
 - spring: one second-order unknown, shown as a mass on a spring. pendulum: one second-order angle. pendulum2: two second-order angles, a double pendulum.
 - level: one first-order quantity (a tank, a population, a temperature). phase: two-state phase plane. attractor: 3D trajectory, three or more states.
 - profile: 1D PDE. surface: 2D PDE. timeline: anything, plotted against time.
@@ -51,22 +61,24 @@ const entries = (key, value, type) => ({
   type: 'array',
   items: { type: 'object', additionalProperties: false, required: [key, value], properties: { [key]: { type: 'string' }, [value]: { type } } },
 });
-// structured outputs need additionalProperties: false, so the maps params{} and ic{} travel as lists of entries
+const nullable = schema => ({ anyOf: [schema, { type: 'null' }] });
+// Structured outputs need additionalProperties: false, so the maps params{} and ic{} travel as lists of entries.
+// OpenAI's strict mode needs every field required, so the optional ones are nullable instead.
 export const SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['name', 'notes', 'eqs', 'params', 'ic'],
+  type: 'object', additionalProperties: false, required: ['name', 'notes', 'eqs', 'params', 'ic', 'bc', 'domain', 'view'],
   properties: {
     name: { type: 'string' },
     notes: { type: 'array', items: { type: 'string' } },
     eqs: { type: 'array', items: { type: 'string' } },
     params: entries('name', 'value', 'number'),
     ic: entries('key', 'latex', 'string'),
-    bc: { type: 'string', enum: ['fixed', 'free', 'periodic'] },
-    domain: { type: 'array', items: { type: 'number' } },
-    view: { type: 'string', enum: ['spring', 'pendulum', 'pendulum2', 'level', 'phase', 'attractor', 'profile', 'surface', 'timeline'] },
+    bc: nullable({ type: 'string', enum: ['fixed', 'free', 'periodic'] }),
+    domain: nullable({ type: 'array', items: { type: 'number' } }),
+    view: nullable({ type: 'string', enum: ['spring', 'pendulum', 'pendulum2', 'level', 'phase', 'attractor', 'profile', 'surface', 'timeline'] }),
   },
 };
 
-// Claude's answer → an example-shaped object, checked by the app's own parser. Throws with a message Claude can act on.
+// The model's answer → an example-shaped object, checked by the app's own parser. Throws with a message the model can act on.
 export function toPreset(out) {
   const p = {
     name: String(out.name || 'Described system'), notes: (out.notes ?? []).map(String), eqs: out.eqs ?? [],
@@ -96,46 +108,68 @@ export function toPreset(out) {
   return p;
 }
 
-// SDK errors carry the HTTP status; turn the common ones into something a user can act on
-function apiMessage(e) {
-  if (e.status === 401) return 'Anthropic rejected the API key. Check it in Settings.';
-  if (e.status === 403) return `This API key can't use ${MODEL}.`;
-  if (e.status === 429) return 'Your Anthropic key hit its rate limit. Wait a minute and try again.';
-  if (e.status >= 500) return 'Claude is busy right now. Try again in a moment.';
-  if (e.status) return `Anthropic API error ${e.status}: ${e.error?.error?.message ?? e.message}`;
-  return "Couldn't reach the Anthropic API. Check your connection.";
+// Errors carry the HTTP status; turn the common ones into something a user can act on
+function apiMessage(p, status, detail) {
+  if (status === 401) return `${p.company} rejected the API key. Check it in Settings.`;
+  if (status === 403) return `This API key can't use ${p.model}.`;
+  if (status === 429) return `Your ${p.company} key hit its rate limit or quota. Wait a minute or check your plan.`;
+  if (status >= 500) return `${p.name} is busy right now. Try again in a moment.`;
+  if (status) return `${p.company} API error ${status}: ${detail}`;
+  return `Couldn't reach the ${p.company} API. Check your connection.`;
 }
+const declined = p => new Error(`${p.name} declined to build that one. Try describing it differently.`);
+const cutOff = p => new Error(`${p.name}'s answer was cut off. Try a shorter description.`);
 
-async function ask(client, content) {
+async function askClaude(p, content, { apiKey, client }) {
+  // the SDK loads only on first use
+  client ??= new (await import('@anthropic-ai/sdk')).default({ apiKey, dangerouslyAllowBrowser: true });
   let res;
   try {
     res = await client.beta.messages.create({
-      model: MODEL, max_tokens: 16000, system: SYSTEM, messages: [{ role: 'user', content }],
+      model: p.model, max_tokens: 16000, system: SYSTEM, messages: [{ role: 'user', content }],
       // thinking is always on (adaptive) for this model; effort sets how hard it thinks
       output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCHEMA } },
       betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default', // a safety decline re-runs on a fallback model
     });
   } catch (e) {
-    throw new Error(apiMessage(e));
+    throw new Error(apiMessage(p, e.status, e.error?.error?.message ?? e.message));
   }
-  if (res.stop_reason === 'refusal') throw new Error('Claude declined to build that one. Try describing it differently.');
-  if (res.stop_reason === 'max_tokens') throw new Error("Claude's answer was cut off. Try a shorter description.");
+  if (res.stop_reason === 'refusal') throw declined(p);
+  if (res.stop_reason === 'max_tokens') throw cutOff(p);
   return JSON.parse(res.content.find(b => b.type === 'text').text);
 }
 
-// Describe → example-shaped object. client is injectable for tests; the SDK loads only on first use.
-export async function buildWithClaude(text, { apiKey, client } = {}) {
-  if (!client) {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true }); // the user's own key, kept in their browser
+async function askChat(p, content, { apiKey, fetch = globalThis.fetch }) {
+  let res;
+  try {
+    res = await fetch(p.url, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: p.model, messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content }],
+        response_format: { type: 'json_schema', json_schema: { name: 'simulation', strict: true, schema: SCHEMA } },
+      }),
+    });
+  } catch {
+    throw new Error(apiMessage(p));
   }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(apiMessage(p, res.status, [body].flat()[0]?.error?.message)); // Gemini wraps errors in an array
+  const { message, finish_reason: end } = body.choices[0];
+  if (message.refusal || end === 'content_filter') throw declined(p);
+  if (end === 'length') throw cutOff(p);
+  return JSON.parse(message.content);
+}
+
+// Describe → example-shaped object. client (Anthropic SDK) and fetch are injectable for tests.
+export async function buildWithAI(text, { provider = 'anthropic', ...opts } = {}) {
+  const p = PROVIDERS[provider];
   let prompt = text, out;
   for (let attempt = 0; attempt < 2; attempt++) {
-    out = await ask(client, prompt);
+    out = await p.ask(p, prompt, opts);
     try {
       return toPreset(out);
     } catch (e) {
-      if (attempt) throw new Error(`Claude's equations didn't parse: ${e.message}`);
+      if (attempt) throw new Error(`${p.name}'s equations didn't parse: ${e.message}`);
       prompt = `${text}\n\nYour previous answer was:\n${JSON.stringify(out)}\n\nThe app rejected it: ${e.message}\nFix that and answer again.`;
     }
   }

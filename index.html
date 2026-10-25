@@ -47,9 +47,14 @@
       <button data-look="plain" title="Same colours, no glow or glitch effects">Plain</button>
       <button data-look="light" title="Dark lines on a light background">Light</button>
     </div>
-    <h2 class="label">Claude (optional)</h2>
-    <input id="claude-key" class="key" type="password" autocomplete="off" spellcheck="false" placeholder="Anthropic API key, sk-ant-…" aria-label="Anthropic API key">
-    <p class="settings-note">Lets "Describe it" build systems the built-in reader doesn't know. The key stays in this browser and goes only to Anthropic. A build costs a few cents, so use a key with a spend limit. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key</a></p>
+    <h2 class="label">AI (optional)</h2>
+    <div id="ai-provider" class="seg" role="group" aria-label="AI provider">
+      <button data-ai="anthropic" title="Anthropic Claude">Claude</button>
+      <button data-ai="openai" title="OpenAI GPT">GPT</button>
+      <button data-ai="gemini" title="Google Gemini">Gemini</button>
+    </div>
+    <input id="ai-key" class="key" type="password" autocomplete="off" spellcheck="false" aria-label="API key for the chosen AI provider">
+    <p class="settings-note">Lets "Describe it" build systems the built-in reader doesn't know. Each key stays in this browser and goes only to its provider. A build costs a few cents, so use a key with a spend limit. <a id="ai-key-link" target="_blank" rel="noopener">Get a key</a></p>
   </div>
 
   <aside class="panel">

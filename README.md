@@ -6,7 +6,7 @@ Type a differential equation and watch it move. Holograph turns ODEs and PDEs in
 
 ## Using it
 
-- **Describe it in words**, e.g. "a pendulum 2 m long released from 60°, with friction, pushed every 3 seconds" or "a flu outbreak where people recover in 7 days". Holograph builds the equations, starting values and parameters, and loads them for you to tweak. This runs in your browser with no AI service: it recognises about 30 kinds of system, modifiers such as friction, a periodic push, insulated ends or 2D, and numbers with units. For anything else, add your own Anthropic API key and Claude builds it (see [Claude mode](#claude-mode-optional)).
+- **Describe it in words**, e.g. "a pendulum 2 m long released from 60°, with friction, pushed every 3 seconds" or "a flu outbreak where people recover in 7 days". Holograph builds the equations, starting values and parameters, and loads them for you to tweak. This runs in your browser with no AI service: it recognises about 30 kinds of system, modifiers such as friction, a periodic push, insulated ends or 2D, and numbers with units. For anything else, add your own API key for Claude, GPT or Gemini and the AI builds it (see [AI mode](#ai-mode-optional)).
 - Type plain text (`y''+4y=0`, `u_t = u_xx`) or paste LaTeX (`\frac{d^2\theta}{dt^2}`, `\frac{\partial u}{\partial t}`, `\nabla^2 u`).
 - Any other letter (`k`, `\omega`, `k_1`) becomes a slider, like in Desmos.
 - Put one equation per row to make a system:
@@ -35,29 +35,35 @@ In the view:
 - **Click the graph** to pin a live readout of the value there. <kbd>Esc</kbd> clears it.
 - **2D** flattens the picture: a side view, top-down heatmap or flat phase portrait. The 3D trajectory has no 2D form, and the app says so.
 - Drag the right edge of the equation panel to widen it. Its text and math grow with it, up to 40% of the window. Double-click the edge to reset.
-- **Settings** (top right) holds every preference: the look (Hologram, Plain with no glow effects, or Light with a light background) and the optional Anthropic API key.
+- **Settings** (top right) holds every preference: the look (Hologram, Plain with no glow effects, or Light with a light background) and the optional AI provider and API key.
 
 Press <kbd>Space</kbd> to pause and <kbd>R</kbd> to restart.
 
-## Claude mode (optional)
+## AI mode (optional)
 
-"Describe it" tries the built-in reader first. When the reader doesn't recognise a description, such as "a ball rolling in a bowl with a little friction", Claude can build the system instead:
+"Describe it" tries the built-in reader first. When the reader doesn't recognise a description, such as "a ball rolling in a bowl with a little friction", an AI model can build the system instead. You choose the provider and bring your own key:
 
-1. Create an API key at [console.anthropic.com](https://console.anthropic.com/settings/keys). Give its workspace a low monthly spend limit.
-2. Open **Settings** and paste the key under **Claude (optional)**.
-3. Describe the system and press **Build**. To get Claude's version of a description the reader already handled, click **Ask Claude instead**.
+| Provider | Model | Get a key |
+|---|---|---|
+| Claude (Anthropic) | Claude Opus 5.5, `claude-opus-5-5` | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| GPT (OpenAI) | GPT-6 Astra, `gpt-6-astra` | [platform.openai.com](https://platform.openai.com/api-keys) |
+| Gemini (Google) | Gemini 4 Argon, `gemini-4-argon` | [aistudio.google.com](https://aistudio.google.com/apikey) |
+
+1. Create an API key with your provider and give it a low monthly spend limit.
+2. Open **Settings**, pick the provider under **AI (optional)** and paste the key.
+3. Describe the system and press **Build**. To get the AI's version of a description the reader already handled, click **Ask … instead**.
 
 What to know:
 
-- **Your key stays in your browser.** It's saved in this browser's localStorage, and the page sends it only to `api.anthropic.com`. Holograph has no server, so nobody else ever receives it. Any script on the page or browser extension could still read it, which is why the spend limit matters. Clear the field to remove the key.
-- **Cost:** each build is one call to Claude Opus 5.5 (`claude-opus-5-5`), about 3–6¢, charged to your key. A failed check adds a second call.
-- **What Claude builds is checked before it loads.** Claude returns the same shape as an example: equations, parameters, starting values and, for PDEs, boundary and domain. Holograph runs it through its own equation parser and compiler. If that fails, Claude gets one retry with the parser's error. If the retry also fails, you see the error and nothing is loaded.
-- Builds made by Claude are tagged **Claude** under the box. AI can be wrong, so check the equations.
-- If Claude's safety checks decline a request, it is re-run on a fallback model (the API's `fallbacks: "default"` option). If that also declines, you see a message.
+- **Your keys stay in your browser.** Each provider's key is saved separately in this browser's localStorage, and the page sends it only to that provider's API. Holograph has no server, so nobody else ever receives it. Any script on the page or browser extension could still read it, which is why the spend limit matters. Clear the field to remove a key.
+- **Cost:** each build is one call to the chosen model, typically a few cents, charged to your key. A failed check adds a second call.
+- **What the AI builds is checked before it loads.** It returns the same shape as an example: equations, parameters, starting values and, for PDEs, boundary and domain. Holograph runs it through its own equation parser and compiler. If that fails, the model gets one retry with the parser's error. If the retry also fails, you see the error and nothing is loaded.
+- Builds made by AI are tagged with the provider's name under the box. AI can be wrong, so check the equations.
+- If Claude's safety checks decline a request, it is re-run on a fallback model (the API's `fallbacks: "default"` option). A refusal from any provider shows as a message.
 
 ### Under the hood
 
-`js/claude.js` uses the official SDK (`@anthropic-ai/sdk`, loaded from jsdelivr through the import map only on first use, with `dangerouslyAllowBrowser: true`). It also uses structured output (`output_config.format`): a JSON schema that returns `params` and `ic` as lists of entries, because the schema can't express free-form maps. The system prompt lists exactly what `js/parse.js` accepts. `tests/claude.test.js` mocks the API client and covers the validation, the retry, refusals and API errors.
+`js/ai.js` holds one entry per provider. Claude uses Anthropic's official SDK (`@anthropic-ai/sdk`, loaded from jsdelivr through the import map only on first use, with `dangerouslyAllowBrowser: true`). GPT and Gemini share one `fetch` call in the Chat Completions format, using Gemini's OpenAI-compatible endpoint, so any other OpenAI-compatible provider is one more entry. Every provider gets the same system prompt, which lists exactly what `js/parse.js` accepts, and the same structured-output JSON schema. The schema returns `params` and `ic` as lists of entries, because it can't express free-form maps. Every field is required and the optional ones are nullable, because OpenAI's strict mode demands that. `tests/ai.test.js` mocks each API and covers the validation, the retry, refusals and API errors.
 
 ## Run locally
 
@@ -80,7 +86,7 @@ The tests cover:
 
 - the equation reader: every notation and every example;
 - the describer;
-- Claude mode with the API mocked: answers that fail the parser are caught and retried once, and refusals and API errors become readable messages;
+- AI mode with each API mocked: answers that fail the parser are caught and retried once, and refusals and API errors become readable messages;
 - the solvers, with physics checks: an oscillator's period, the exact heat decay rate, 2D wave stability, periodic advection, the double pendulum against its closed form, Poisson against its exact solution, and Schrödinger conserving probability;
 - a short run of every example at the app's grid size.
 
@@ -89,7 +95,7 @@ The tests cover:
 - `js/parse.js` converts LaTeX or plain text into a classified model and compiles it to fast JavaScript. Equations are linear in their highest derivatives, so a small linear solve handles coupled systems.
 - `js/solver.js` runs RK4. Each step size is set from a power-iteration estimate of the system's stiffness. PDEs use finite differences with ghost cells for the boundary conditions, and several fields share one state array.
 - `js/describe.js` turns a description into equations, using a vocabulary of systems, modifiers and quantities with units.
-- `js/claude.js` is the optional Claude mode for descriptions the built-in reader doesn't recognise.
+- `js/ai.js` is the optional AI mode (Claude, GPT or Gemini) for descriptions the built-in reader doesn't recognise.
 - `js/scene.js` draws the three.js hologram stage and the physical views.
 - `js/app.js` handles the editor, sliders and playback. `js/presets.js` holds the examples.
 
