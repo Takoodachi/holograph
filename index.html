@@ -17,7 +17,8 @@
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
         "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/",
-        "mathjs": "https://cdn.jsdelivr.net/npm/mathjs@15.2.0/+esm"
+        "mathjs": "https://cdn.jsdelivr.net/npm/mathjs@15.2.0/+esm",
+        "@anthropic-ai/sdk": "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.133.0/+esm"
       }
     }
   </script>
@@ -46,6 +47,9 @@
       <button data-look="plain" title="Same colours, no glow or glitch effects">Plain</button>
       <button data-look="light" title="Dark lines on a light background">Light</button>
     </div>
+    <h2 class="label">Claude (optional)</h2>
+    <input id="claude-key" class="key" type="password" autocomplete="off" spellcheck="false" placeholder="Anthropic API key, sk-ant-…" aria-label="Anthropic API key">
+    <p class="settings-note">Lets "Describe it" build systems the built-in reader doesn't know. The key stays in this browser and goes only to Anthropic. A build costs a few cents, so use a key with a spend limit. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get a key</a></p>
   </div>
 
   <aside class="panel">

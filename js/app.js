@@ -3,6 +3,7 @@ import { odeSim, pdeSim, scan, Lookahead, untau } from './solver.js';
 import { createStage, VIEWS, VIEW_NAMES, LOOKS, tickText } from './scene.js';
 import { PRESETS } from './presets.js';
 import { describe, DESCRIBE_HINTS } from './describe.js';
+import { buildWithClaude } from './claude.js';
 
 await customElements.whenDefined('math-field');
 // MathLive guesses asset paths from its script URL, which is wrong for the root-level CDN build
@@ -526,21 +527,46 @@ $('#examples').replaceChildren(...PRESETS.flatMap((p, i) => {
 }));
 
 // ---------- describe a system in words → equations, loaded like an example ----------
+// The built-in reader goes first; Claude (with the user's own key from Settings) takes what it can't place.
+let claudeKey = '';
+try { claudeKey = localStorage.getItem('holograph.claudeKey') || ''; } catch {}
+$('#claude-key').value = claudeKey;
+$('#claude-key').oninput = e => {
+  claudeKey = e.target.value.trim();
+  try { if (claudeKey) localStorage.setItem('holograph.claudeKey', claudeKey); else localStorage.removeItem('holograph.claudeKey'); } catch {}
+};
+const note = (cls, ...parts) => { $('#describe-note').className = `describe-note ${cls}`; $('#describe-note').replaceChildren(...parts); };
+const hint = (text, onclick) => Object.assign(el('button', 'hint', text), { type: 'button', onclick });
+const openSettings = () => $('#settings').showPopover();
+const aiTag = () => el('span', 'ai-tag', 'Claude');
+
 function buildFromWords(text) {
-  const note = $('#describe-note'), p = text.trim() && describe(text);
+  const p = text.trim() && describe(text);
   if (!p) {
-    note.className = 'describe-note err';
-    note.replaceChildren(text.trim() ? "Couldn't tell which system that is. Try: " : 'Try: ', ...DESCRIBE_HINTS.slice(0, 3).flatMap((h, i) => {
-      const b = el('button', 'hint', h);
-      b.type = 'button';
-      b.onclick = () => { $('#describe-text').value = h; buildFromWords(h); };
+    if (text.trim() && claudeKey) return buildWithAI(text);
+    note('err', text.trim() ? "Couldn't tell which system that is. Try: " : 'Try: ', ...DESCRIBE_HINTS.slice(0, 3).flatMap((h, i) => {
+      const b = hint(h, () => { $('#describe-text').value = h; buildFromWords(h); });
       return i ? [' · ', b] : [b];
-    }));
+    }), ...(text.trim() ? ['. Or add an Anthropic API key in ', hint('Settings', openSettings), ' and Claude will try it.'] : []));
     return;
   }
   load(p);
-  note.className = 'describe-note';
-  note.textContent = `Built: ${[p.name, ...p.notes].join(' · ')}. Edit the equation below to refine it.`;
+  note('', `Built: ${[p.name, ...p.notes].join(' · ')}. Edit the equation below to refine it.`, ...(claudeKey ? [' ', hint('Ask Claude instead', () => buildWithAI(text))] : []));
+}
+
+async function buildWithAI(text) {
+  const go = $('.describe-go');
+  go.disabled = true; // a disabled default button also stops Enter from submitting again
+  note('busy', aiTag(), 'Asking Claude to build it. This takes 10–30 seconds…');
+  try {
+    const p = await buildWithClaude(text, { apiKey: claudeKey });
+    load(p);
+    note('', aiTag(), `Built by Claude: ${[p.name, ...p.notes].join(' · ')}. AI can be wrong, so check the equations below.`);
+  } catch (e) {
+    note('err', aiTag(), e.message, ...(/API key/.test(e.message) ? [' ', hint('Open Settings', openSettings)] : []));
+  } finally {
+    go.disabled = false;
+  }
 }
 $('#describe').onsubmit = e => { e.preventDefault(); buildFromWords($('#describe-text').value); };
 
