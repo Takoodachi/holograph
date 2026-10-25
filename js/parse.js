@@ -125,12 +125,18 @@ function tex(s) {
       let a;
       [a, i] = group(s, i + 1);
       out += `^(${tex(a)})`;
+    } else if (c === '_' && s[i + 1] === '_') {
+      const m = /^__[a-z@]+/.exec(s.slice(i)); // a derivative token shorthand() already made: x__t, y__@@
+      out += m[0] + ' ';
+      i += m[0].length;
     } else if (c === '_') {
+      // u_{xx} or plain u_xx is a partial derivative (a run of t/x/y); k_1 or T_a is just a name, and the subscript
+      // ends there: \rho_0e^{x} is ρ₀·eˣ
       let a;
-      [a, i] = group(s, i + 1);
+      const run = s[i + 1] !== '{' && /^[txy]+/.exec(s.slice(i + 1));
+      if (run) { a = run[0]; i += 1 + a.length; } else [a, i] = group(s, i + 1);
       a = a.replace(/[\s{}\\]/g, '');
-      // u_{xx} is a partial derivative; k_1 or T_a is just a name
-      out += /^[txy]+$/.test(a) && /[a-zA-Z]$/.test(out) ? '__' + sortLetters(a) : '_' + a;
+      out += (/^[txy]+$/.test(a) && /[a-zA-Z]$/.test(out) ? '__' + sortLetters(a) : '_' + a) + ' ';
     } else {
       out += c === '{' ? '(' : c === '}' ? ')' : c;
       i++;
@@ -240,17 +246,21 @@ export function analyze(sources) {
   return letters.size > 1 ? pde(eqs, ders) : ode(eqs, ders, [...letters][0]);
 }
 
-// match each equation to the unknown whose highest derivative it gives
-function assign(H) {
-  const owner = [], used = new Set();
-  const go = i => i === H.length || H[i].some(v => {
-    if (used.has(v)) return false;
-    used.add(v); owner[i] = v;
-    if (go(i + 1)) return true;
-    used.delete(v);
-    return false;
-  });
-  return go(0) ? owner : null;
+// The equations are linear in the unknowns' highest derivatives h: G(h) = A·h + b, with b = G(0) and column j of A
+// = G(e_j) − b. Gauss–Jordan solves A·h = −b, so coupled systems (double pendulum: θ″ and φ″ in both equations) just work.
+export function solveLinear(cols, b) {
+  const n = b.length, M = b.map((bi, i) => [...cols.map(c => c[i] - bi), -bi]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  return M.map((row, i) => row[n] / row[i]); // a singular system gives NaN, which stops the run as "blew up"
 }
 
 function ode(eqs, ders, indep) {
@@ -263,38 +273,29 @@ function ode(eqs, ders, indep) {
   const top = v => dname(v, order[v]);
   const state = vars.flatMap(v => Array.from({ length: order[v] }, (_, k) => dname(v, k)));
 
-  const H = eqs.map(e => vars.filter(v => e.sym.has(top(v))));
-  const owner = assign(H);
-  if (!owner) throw new Error('Each equation should give the highest derivative of one unknown');
-  // an equation may use another unknown's highest derivative once that one is computed
-  const todo = eqs.map((_, i) => i), seq = [];
-  while (todo.length) {
-    const k = todo.findIndex(i => H[i].every(v => v === owner[i] || seq.some(j => owner[j] === v)));
-    if (k < 0) throw new Error('These equations are implicitly coupled; solve each for its highest derivative');
-    seq.push(...todo.splice(k, 1));
-  }
-
   const reserved = new Set([...state, ...vars.map(top), indep]);
   const params = [...new Set(eqs.flatMap(e => [...e.sym]))].filter(s => !reserved.has(s));
 
+  const hs = vars.map(v => '$' + top(v)), all = `[${eqs.map(e => e.js).join(',')}]`;
   const body = [
     declParams(params),
     `const $${indep} = t;`,
     ...state.map((s, k) => `const $${s} = Y[${k}];`),
-    ...vars.map(v => `let $${top(v)} = 0;`),
+    `let ${hs.map(h => `${h} = 0`).join(', ')};`,
     ...vars.flatMap(v => Array.from({ length: order[v] - 1 }, (_, k) => `dY[${state.indexOf(dname(v, k))}] = $${dname(v, k + 1)};`)),
-    ...seq.map(i => {
-      const v = owner[i], h = '$' + top(v), js = eqs[i].js;
-      return `${h} = 0; { const g0 = ${js}; ${h} = 1; ${h} = -g0 / ((${js}) - g0); } dY[${state.indexOf(dname(v, order[v] - 1))}] = ${h};`;
-    }),
+    `const b = ${all};`,
+    ...hs.map((h, j) => `${h} = 1; const c${j} = ${all}; ${h} = 0;`),
+    `const h = solve([${hs.map((_, j) => `c${j}`).join(',')}], b);`,
+    ...vars.map((v, j) => `dY[${state.indexOf(dname(v, order[v] - 1))}] = h[${j}];`),
   ].join('\n');
-  const fn = new Function('F', 'P', 't', 'Y', 'dY', body);
+  const fn = new Function('F', 'solve', 'P', 't', 'Y', 'dY', body);
 
   const n = state.length;
   const pick = k => (vars.length >= k ? vars.slice(0, k) : state.slice(0, k)).map(s => state.indexOf(s));
   const angle = /^(theta|vartheta|phi|varphi)$/.test(vars[0]) || eqs.some(e => /F\.(sin|cos)\(\$/.test(e.js));
   const views = [];
   if (vars.length === 1 && order[vars[0]] === 2) views.push(...(angle ? ['pendulum', 'spring'] : ['spring', 'pendulum']));
+  if (vars.length === 2 && vars.every(v => order[v] === 2) && angle) views.push('pendulum2');
   if (n === 1) views.push('level');
   if (n >= 2) views.push('phase');
   if (n >= 3) views[vars.length === 3 || (vars.length === 1 && n === 3) ? 'unshift' : 'push']('attractor');
@@ -303,7 +304,7 @@ function ode(eqs, ders, indep) {
   const ord = ['', '1st', '2nd', '3rd'][Math.max(...Object.values(order))] ?? `${Math.max(...Object.values(order))}th`;
   return {
     kind: 'ode', indep, vars, order, state, params, views,
-    deriv: (P, t, Y, dY) => fn(F, P, t, Y, dY),
+    deriv: (P, t, Y, dY) => fn(F, solveLinear, P, t, Y, dY),
     coords: { phase: pick(2), attractor: pick(3), uniform: vars.length >= 2 },
     label: vars.length > 1 ? `ODE system · ${vars.length} unknowns · ${vars.join(', ')}(${indep})` : `ODE · ${ord} order · ${vars[0]}(${indep})`,
   };
@@ -311,25 +312,50 @@ function ode(eqs, ders, indep) {
 
 const SPACE = /^(x{1,4}|y{1,4}|xy)$/;
 
+// One or more fields (u, v, …), each evolved by the equation holding its time derivative (u_t or u_tt).
+// With no time derivative at all (2D, e.g. Laplace/Poisson) the field relaxes to the steady state instead:
+// u_t = ±G with the sign that makes the leading spatial term diffusive, so the run converges to G = 0.
 function pde(eqs, ders) {
-  if (eqs.length > 1) throw new Error("Systems of PDEs aren't supported yet. Use a single equation");
-  const bases = [...new Set(ders.map(d => d.base))];
-  if (bases.length > 1) throw new Error(`A PDE should have one unknown field, found ${bases.join(', ')}`);
-  const u = bases[0], e = eqs[0];
   if (ders.some(d => d.wrt.includes('t') && /[xy]/.test(d.wrt))) throw new Error("Mixed time–space derivatives (like u_xt) aren't supported");
-  const tOrder = Math.max(0, ...ders.filter(d => /^t+$/.test(d.wrt)).map(d => d.wrt.length));
-  if (!tOrder) throw new Error("Add a time derivative (u_t or u_tt). Steady-state equations aren't supported yet");
-  if (tOrder > 2) throw new Error('Time derivatives up to u_tt are supported');
-  const space = ders.filter(d => !d.wrt.includes('t')).map(d => d.wrt);
+  const timeOrder = b => Math.max(0, ...ders.filter(d => d.base === b && /^t+$/.test(d.wrt)).map(d => d.wrt.length));
+  const bases = [...new Set(ders.map(d => d.base))], steady = bases.every(b => !timeOrder(b));
+  let fields;
+  if (steady) {
+    if (eqs.length > 1 || bases.length > 1) throw new Error('A steady-state problem (no time derivative) needs a single equation in one field');
+    fields = [{ name: bases[0], tOrder: 0, eq: eqs[0] }];
+  } else {
+    if (eqs.length !== bases.length) throw new Error(`${eqs.length} equation${eqs.length > 1 ? 's' : ''} for ${bases.length} fields (${bases.join(', ')})`);
+    fields = eqs.map(e => {
+      const own = bases.filter(b => timeOrder(b) && e.sym.has(`${b}__${'t'.repeat(timeOrder(b))}`));
+      if (own.length !== 1) throw new Error('Each equation should give the time derivative of one field, e.g. u_t = … and v_t = …');
+      return { name: own[0], tOrder: timeOrder(own[0]), eq: e };
+    });
+    if (new Set(fields.map(f => f.name)).size < fields.length) throw new Error("Two equations give the same field's time derivative");
+  }
+  if (fields.some(f => f.tOrder > 2)) throw new Error('Time derivatives up to u_tt are supported');
+  const space = [...new Set(ders.filter(d => !d.wrt.includes('t')).map(d => d.wrt))];
   const bad = space.find(w => !SPACE.test(w) || /[^xy]/.test(w));
-  if (bad) throw new Error(`Unsupported derivative ${u}_${bad}. Use x and y up to 4th order`);
+  if (bad) throw new Error(`Unsupported derivative _${bad}. Use x and y up to 4th order`);
   const dims = space.some(w => w.includes('y')) ? 2 : 1;
-  const H = `${u}__${'t'.repeat(tOrder)}`;
-  const reserved = new Set([u, `${u}__t`, `${u}__tt`, ...space.map(w => `${u}__${w}`), 't', 'x', ...(dims === 2 ? ['y'] : [])]);
-  const params = [...e.sym].filter(s => !reserved.has(s));
+  const ids = new Set(ders.map(d => d.id));
+  const reserved = new Set(['t', 'x', ...(dims === 2 ? ['y'] : []), ...fields.map(f => f.name), ...ids]);
+  const params = [...new Set(eqs.flatMap(e => [...e.sym]))].filter(s => !reserved.has(s));
 
-  // g: padded grid { NX, NY, W, GY, x0, dx, y0, dy }; U, V, OUT are padded arrays
-  const kernel = g => {
+  // g: padded grid { NX, NY, W, GY, L, x0, dx, y0, dy }; off[name]: where a field's values start in S (its ∂ₜ follows L later)
+  const kernel = (g, off) => {
+    const decl = fields.flatMap(f => [
+      `const $${f.name} = S[k+${off[f.name]}];`,
+      f.tOrder === 2 ? `const $${f.name}__t = S[k+${off[f.name] + g.L}];` : '',
+      ...space.filter(w => ids.has(`${f.name}__${w}`)).map(w => `let $${f.name}__${w} = ${stencil(w, g, off[f.name])};`),
+    ]);
+    const solve = fields.map(f => {
+      if (!f.tOrder) {
+        const lead = ['xx', 'yy', 'xxxx', 'yyyy'].find(w => ids.has(`${f.name}__${w}`)), tok = `$${f.name}__${lead}`;
+        return `{ const g0 = ${f.eq.js}; ${tok} += 1; const c = (${f.eq.js}) - g0; ${tok} -= 1; OUT[k+${off[f.name]}] = (c > 0 ? ${lead.length === 2 ? 1 : -1} : ${lead.length === 2 ? -1 : 1}) * g0; }`;
+      }
+      const H = `$${f.name}__${'t'.repeat(f.tOrder)}`, out = off[f.name] + (f.tOrder === 2 ? g.L : 0);
+      return `{ let ${H} = 0; const g0 = ${f.eq.js}; ${H} = 1; OUT[k+${out}] = -g0 / ((${f.eq.js}) - g0); }`;
+    });
     const body = `${declParams(params)}
 const $t = t;
 for (let j = 0; j < ${g.NY}; j++) {
@@ -337,30 +363,33 @@ for (let j = 0; j < ${g.NY}; j++) {
   for (let i = 0; i < ${g.NX}; i++) {
     const k = (j + ${g.GY}) * ${g.W} + i + 2;
     const $x = ${g.x0} + i * ${g.dx};
-    const $${u} = U[k];
-    ${tOrder === 2 ? `const $${u}__t = V[k];` : ''}
-    ${space.map(w => `const $${u}__${w} = ${stencil(w, g)};`).join('\n    ')}
-    let $${H} = 0; const g0 = ${e.js}; $${H} = 1; OUT[k] = -g0 / ((${e.js}) - g0);
+    ${decl.filter(Boolean).join('\n    ')}
+    ${solve.join('\n    ')}
   }
 }`;
-    const fn = new Function('F', 'P', 't', 'U', 'V', 'OUT', body);
-    return (P, t, U, V, OUT) => fn(F, P, t, U, V, OUT);
+    const fn = new Function('F', 'P', 't', 'S', 'OUT', body);
+    return (P, t, S, OUT) => fn(F, P, t, S, OUT);
   };
 
-  const kind = tOrder === 2 ? 'wave-type' : space.some(w => w.length % 2 === 0) ? 'diffusion-type' : 'transport-type';
+  const u = fields[0].name, names = fields.map(f => f.name).join(', ');
+  // a field driven by another field's spatial derivatives (Schrödinger's u_t = −βv_xx) behaves like a wave, not diffusion
+  const cross = fields.some(f => [...f.eq.sym].some(s => /__[xy]+$/.test(s) && !s.startsWith(`${f.name}__`)));
+  const kind = steady ? 'steady state' : fields.some(f => f.tOrder === 2) || cross ? 'wave-type'
+    : space.some(w => w.length % 2 === 0) ? (fields.length > 1 ? 'reaction–diffusion' : 'diffusion-type') : 'transport-type';
+  const where = `${dims === 2 ? 'x,y' : 'x'}${steady ? '' : ',t'}`;
   return {
-    kind: 'pde', u, tOrder, dims, space, params, kernel,
+    kind: 'pde', u, tOrder: fields[0].tOrder, fields: fields.map(({ name, tOrder }) => ({ name, tOrder })), steady, dims, space, params, kernel,
     views: [dims === 2 ? 'surface' : 'profile', 'timeline'],
-    label: `PDE · ${kind} · ${u}(${dims === 2 ? 'x,y' : 'x'},t)`,
+    label: fields.length > 1 ? `PDE system · ${kind} · ${names}(${where}) · showing ${u}` : `PDE · ${kind} · ${u}(${where})`,
   };
 }
 
-// 2nd-order central differences on a grid padded with 2 ghost cells
-function stencil(w, g) {
+// 2nd-order central differences on a grid padded with 2 ghost cells; the field's values start at S[off]
+function stencil(w, g, off) {
   const W = g.W;
-  if (w === 'xy') return `(U[k+${W + 1}]-U[k+${W - 1}]-U[k-${W - 1}]+U[k-${W + 1}])*${1 / (4 * g.dx * g.dy)}`;
+  if (w === 'xy') return `(S[k+${off + W + 1}]-S[k+${off + W - 1}]-S[k+${off - W + 1}]+S[k+${off - W - 1}])*${1 / (4 * g.dx * g.dy)}`;
   const s = w[0] === 'x' ? 1 : W, h = w[0] === 'x' ? g.dx : g.dy;
-  const at = o => (o ? `U[k${o > 0 ? '+' : '-'}${Math.abs(o) * s}]` : 'U[k]');
+  const at = o => `S[k+${off + o * s}]`;
   return [
     `(${at(1)}-${at(-1)})*${1 / (2 * h)}`,
     `(${at(1)}-2*${at(0)}+${at(-1)})*${1 / h ** 2}`,

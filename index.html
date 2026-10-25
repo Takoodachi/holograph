@@ -58,6 +58,15 @@
     </header>
 
     <section>
+      <h2 class="label">Describe it</h2>
+      <form id="describe" class="describe" autocomplete="off">
+        <input id="describe-text" type="text" aria-label="Describe a physical system in words" placeholder="e.g. a pendulum with friction, pushed every 2 s">
+        <button type="submit" class="describe-go">Build</button>
+      </form>
+      <p id="describe-note" class="describe-note" role="status" aria-live="polite"></p>
+    </section>
+
+    <section>
       <h2 class="label">Equations</h2>
       <div id="eqs"></div>
       <button id="add-eq" class="link">+ Add equation <span>(for systems)</span></button>

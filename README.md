@@ -6,14 +6,20 @@ Type a differential equation and watch it move. Holograph turns ODEs and PDEs in
 
 ## Using it
 
+- **Describe it in words**, e.g. "a pendulum 2 m long released from 60°, with friction, pushed every 3 seconds" or "a flu outbreak where people recover in 7 days". Holograph builds the equations, starting values and parameters, and loads them for you to tweak. This runs in your browser with no AI service: it recognises about 30 kinds of system, modifiers such as friction, a periodic push, insulated ends or 2D, and numbers with units.
 - Type plain text (`y''+4y=0`, `u_t = u_xx`) or paste LaTeX (`\frac{d^2\theta}{dt^2}`, `\frac{\partial u}{\partial t}`, `\nabla^2 u`).
 - Any other letter (`k`, `\omega`, `k_1`) becomes a slider, like in Desmos.
-- Put one equation per row to make a system (Lorenz, predator–prey, Kepler).
+- Put one equation per row to make a system:
+  - ODEs (Lorenz, SIR, Kepler), including coupled ones where every equation holds several second derivatives, like the double pendulum;
+  - PDEs with several fields (Turing patterns, quantum ψ = u + iv), where each equation gives one field's time derivative.
+- A 2D PDE without a time derivative (Laplace, Poisson) is solved as a steady state: it relaxes until it stops changing.
+- Over 30 examples, grouped: mechanics, chaos, life & chemistry, circuits & cooling, heat & diffusion, waves.
 - Holograph detects the equation type and picks a picture for it:
 
 | Equation | Picture |
 |---|---|
 | 2nd-order ODE | mass on a spring or a pendulum |
+| two angles, 2nd order | double pendulum |
 | 1st-order ODE | liquid level in a tank |
 | 2 unknowns | phase plane with a flowing vector field |
 | 3 unknowns | 3D trajectory |
@@ -50,13 +56,23 @@ npm install
 npm test
 ```
 
-The tests cover the equation reader (every notation and every example) and the solvers, including physics checks: an oscillator's period, the exact heat decay rate, 2D wave stability and periodic advection.
+The tests cover:
+
+- the equation reader: every notation and every example;
+- the describer;
+- the solvers, with physics checks: an oscillator's period, the exact heat decay rate, 2D wave stability, periodic advection, the double pendulum against its closed form, Poisson against its exact solution, and Schrödinger conserving probability;
+- a short run of every example at the app's grid size.
 
 ## How it works
 
-- `js/parse.js` converts LaTeX or plain text into a classified model and compiles it to fast JavaScript.
-- `js/solver.js` runs RK4. Each step size is set from a power-iteration estimate of the system's stiffness. PDEs use finite differences with ghost cells for the boundary conditions.
+- `js/parse.js` converts LaTeX or plain text into a classified model and compiles it to fast JavaScript. Equations are linear in their highest derivatives, so a small linear solve handles coupled systems.
+- `js/solver.js` runs RK4. Each step size is set from a power-iteration estimate of the system's stiffness. PDEs use finite differences with ghost cells for the boundary conditions, and several fields share one state array.
+- `js/describe.js` turns a description into equations, using a vocabulary of systems, modifiers and quantities with units.
 - `js/scene.js` draws the three.js hologram stage and the physical views.
 - `js/app.js` handles the editor, sliders and playback. `js/presets.js` holds the examples.
 
-Known limits: no steady-state (elliptic) PDEs, no systems of PDEs, and no complex-valued equations.
+Known limits:
+
+- Complex-valued equations have to be split into real and imaginary fields (see the quantum example).
+- A PDE system shows its first field; reorder the equations to show another.
+- Steady states are 2D only. A 1D steady state is an ODE in x.

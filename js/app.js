@@ -2,6 +2,7 @@ import { analyze, compileExpr, GREEK, F } from './parse.js';
 import { odeSim, pdeSim, scan, Lookahead, untau } from './solver.js';
 import { createStage, VIEWS, VIEW_NAMES, LOOKS, tickText } from './scene.js';
 import { PRESETS } from './presets.js';
+import { describe, DESCRIBE_HINTS } from './describe.js';
 
 await customElements.whenDefined('math-field');
 // MathLive guesses asset paths from its script URL, which is wrong for the root-level CDN build
@@ -139,11 +140,13 @@ function renderViews() {
 // ---------- initial conditions ----------
 function icSpecs(m) {
   if (m.kind === 'pde') {
-    const at = m.dims === 2 ? '(x,y,0)' : '(x,0)';
-    return [
-      { key: 'u0', label: `${glyph(m.u)}${at}`, def: m.dims === 2 ? String.raw`e^{-30\left(x^2+y^2\right)}` : String.raw`e^{-30x^2}` },
-      ...(m.tOrder === 2 ? [{ key: 'v0', label: `∂ₜ${glyph(m.u)}${at}`, def: '0' }] : []),
-    ];
+    // keys match ODE state names: the field's own name for its values, name__t for its starting rate
+    const at = m.steady ? '(x,y) at start' : m.dims === 2 ? '(x,y,0)' : '(x,0)';
+    const bump = m.dims === 2 ? String.raw`e^{-30\left(x^2+y^2\right)}` : String.raw`e^{-30x^2}`;
+    return m.fields.flatMap((f, i) => [
+      { key: f.name, label: `${glyph(f.name)}${at}`, def: i || m.steady ? '0' : bump },
+      ...(f.tOrder === 2 ? [{ key: `${f.name}__t`, label: `∂ₜ${glyph(f.name)}${at}`, def: '0' }] : []),
+    ]);
   }
   return m.state.map(s => {
     const [v, d = ''] = s.split('__');
@@ -247,8 +250,10 @@ function reset() {
       Object.assign(state.ctx, { comps, names: comps.map(k => state.ctx.labels[k]), tName: m.indep });
     }
   } else {
-    const [a, b] = state.domain, u0 = (x, y) => ics.fn.u0(P, x, y), v0 = (x, y) => ics.fn.v0?.(P, x, y) ?? 0;
-    const sim = pdeSim(m, P, { n: m.dims === 2 ? 81 : 241, a, b, bc: state.bc }, u0, v0);
+    const [a, b] = state.domain, init = Object.fromEntries(Object.entries(ics.fn).map(([k, fn]) => [k, (x, y) => fn(P, x, y)]));
+    // a steady state is smooth and only its end matters: a coarser grid relaxes ~16× faster (4× fewer points, 4× longer steps)
+    const sim = pdeSim(m, P, { n: m.steady ? 41 : m.dims === 2 ? 81 : 241, a, b, bc: state.bc }, init);
+    state.residual0 = null;
     let lo = Infinity, hi = -Infinity;
     for (let j = 0; j < sim.NY; j++) for (let i = 0; i < sim.NX; i++) { const u = sim.S[sim.idx(i, j)]; lo = Math.min(lo, u); hi = Math.max(hi, u); }
     if (!Number.isFinite(lo + hi)) return status(`${glyph(m.u)}(x,0) is not finite everywhere on the domain`, true);
@@ -259,7 +264,7 @@ function reset() {
       // the look-ahead runs on a coarser grid: it only has to indicate the long run, and stiff PDEs get 4× longer stable steps
       const grid = { n: m.dims === 2 ? 41 : 121, a, b, bc: state.bc }, NY = m.dims === 2 ? grid.n : 1, j = NY >> 1, buf = new Float64Array(grid.n);
       makeAhead = () => {
-        const ahead = pdeSim(m, P, grid, u0, v0);
+        const ahead = pdeSim(m, P, grid, init);
         return new Lookahead(ahead, S => { for (let i = 0; i < ahead.NX; i++) buf[i] = S[ahead.idx(i, j)]; return buf; }, TIME_W);
       };
       const dx = (b - a) / (grid.bc === 'periodic' ? grid.n : grid.n - 1);
@@ -393,6 +398,16 @@ function drawLabels() {
   });
 }
 
+// How far a steady state has relaxed: the largest rate of change in the last step (RK4's first stage), against the
+// first frame's, on a log scale; 10⁻⁴ of where it started counts as reached
+function relaxText(sim) {
+  let r = 0;
+  for (const v of sim.k.k1) r = Math.max(r, Math.abs(v));
+  state.residual0 ??= r;
+  const done = Math.log(state.residual0 / r) / Math.log(1e4);
+  return !(done < 1) ? 'steady state reached ✓' : `relaxing to the steady state · ${Math.max(0, Math.round(100 * done))}%`;
+}
+
 // ---------- loop ----------
 let last = performance.now();
 function frame(now) {
@@ -403,9 +418,12 @@ function frame(now) {
   if (sim && view3d && !state.broken) {
     let dt = 0;
     if (state.playing) {
-      const want = real * state.speed, got = sim.advance(want);
+      // a steady state's pseudo-time means nothing: relax as far as the frame's compute budget allows
+      const steady = state.model.steady;
+      if (steady && !Number.isFinite(sim.h)) sim.retune(); // the step size is still untuned before the first frame
+      const want = steady ? sim.h * 1e4 : real * state.speed, got = sim.advance(want);
       dt = want * got;
-      $('#rate').textContent = got < 0.95 ? `slow motion ×${got.toFixed(2)}` : '';
+      $('#rate').textContent = steady ? relaxText(sim) : got < 0.95 ? `slow motion ×${got.toFixed(2)}` : '';
       if (!sim.finite()) {
         state.broken = true;
         setPlaying(false);
@@ -500,12 +518,31 @@ function load(p) {
   rebuild();
   setPlaying(true);
 }
-$('#examples').replaceChildren(...PRESETS.map(p => {
+$('#examples').replaceChildren(...PRESETS.flatMap((p, i) => {
   const b = el('button', 'example');
-  b.append(el('small', '', p.bc ? 'PDE' : p.eqs.length > 1 ? 'SYSTEM' : 'ODE'), p.name);
+  b.append(el('small', '', p.bc ? (p.eqs.length > 1 ? 'PDE SYSTEM' : 'PDE') : p.eqs.length > 1 ? 'SYSTEM' : 'ODE'), p.name);
   b.onclick = () => load(p);
-  return b;
+  return p.group !== PRESETS[i - 1]?.group ? [el('h3', 'example-group', p.group), b] : [b];
 }));
+
+// ---------- describe a system in words → equations, loaded like an example ----------
+function buildFromWords(text) {
+  const note = $('#describe-note'), p = text.trim() && describe(text);
+  if (!p) {
+    note.className = 'describe-note err';
+    note.replaceChildren(text.trim() ? "Couldn't tell which system that is. Try: " : 'Try: ', ...DESCRIBE_HINTS.slice(0, 3).flatMap((h, i) => {
+      const b = el('button', 'hint', h);
+      b.type = 'button';
+      b.onclick = () => { $('#describe-text').value = h; buildFromWords(h); };
+      return i ? [' · ', b] : [b];
+    }));
+    return;
+  }
+  load(p);
+  note.className = 'describe-note';
+  note.textContent = `Built: ${[p.name, ...p.notes].join(' · ')}. Edit the equation below to refine it.`;
+}
+$('#describe').onsubmit = e => { e.preventDefault(); buildFromWords($('#describe-text').value); };
 
 load(PRESETS[0]);
 requestAnimationFrame(frame);

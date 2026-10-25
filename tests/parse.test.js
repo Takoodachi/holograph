@@ -64,10 +64,48 @@ test('heat equation from \\partial LaTeX', () => {
   assert.equal(m.dims, 1);
   assert.deepEqual(m.params, ['alpha']);
   // u = x² on a padded 1D grid → u_t = α·2
-  const NX = 5, dx = 0.5, x0 = -1, g = { NX, NY: 1, W: NX + 4, GY: 0, x0, dx, y0: 0, dy: 1 };
+  const NX = 5, dx = 0.5, x0 = -1, g = { NX, NY: 1, W: NX + 4, GY: 0, L: NX + 4, x0, dx, y0: 0, dy: 1 };
   const U = new Float64Array(g.W).map((_, k) => (x0 + (k - 2) * dx) ** 2), OUT = new Float64Array(g.W);
-  m.kernel(g)({ alpha: 3 }, 0, U, null, OUT);
+  m.kernel(g, { u: 0 })({ alpha: 3 }, 0, U, OUT);
   for (let i = 0; i < NX; i++) near(OUT[i + 2], 6);
+});
+
+test('double pendulum: both equations hold both θ″ and φ″ (solved together)', () => {
+  const m = analyze([
+    String.raw`2\ddot{\theta}+\ddot{\phi}\cos\left(\theta-\phi\right)+\dot{\phi}^2\sin\left(\theta-\phi\right)+\frac{2g}{L}\sin\theta=0`,
+    String.raw`\ddot{\phi}+\ddot{\theta}\cos\left(\theta-\phi\right)-\dot{\theta}^2\sin\left(\theta-\phi\right)+\frac{g}{L}\sin\phi=0`,
+  ]);
+  assert.deepEqual(m.state, ['theta', 'theta__t', 'phi', 'phi__t']);
+  assert.equal(m.views[0], 'pendulum2');
+  // closed form for equal masses and lengths (g/L = 1)
+  const [a, wa, b, wb] = [0.7, 0.3, -0.4, 1.1], s = Math.sin(a - b), c = Math.cos(a - b), den = 2 - c ** 2;
+  const a2 = (-(wb ** 2) * s - 2 * Math.sin(a) - c * (wa ** 2 * s - Math.sin(b))) / den;
+  const b2 = (2 * wa ** 2 * s - 2 * Math.sin(b) + c * (wb ** 2 * s + 2 * Math.sin(a))) / den;
+  const dY = d(m, { g: 1, L: 1 }, 0, [a, wa, b, wb]);
+  near(dY[1], a2);
+  near(dY[3], b2);
+});
+
+test('PDE systems: each equation evolves its own field', () => {
+  const m = analyze(['u_t=Du_{xx}-uv^2+F\\left(1-u\\right)', 'v_t=Ev_{xx}+uv^2-\\left(F+k\\right)v']);
+  assert.deepEqual(m.fields.map(f => f.name), ['u', 'v']);
+  assert.deepEqual(m.params.sort(), ['D', 'E', 'F', 'k']);
+  assert.match(m.label, /PDE system · reaction–diffusion/);
+  assert.match(analyze(['u_t=-\\beta v_{xx}', 'v_t=\\beta u_{xx}']).label, /wave-type/);
+  assert.throws(() => analyze(['u_t=v_{xx}', 'u_t=u_{xx}']), /same field|time derivative of one field/);
+});
+
+test('a subscript ends where the name does: ρ₀eˣ, k₁x; plain u_xx is still ∂²u/∂x²', () => {
+  assert.deepEqual(analyze([String.raw`u_t=u_{xx}+\rho_0e^{x}`]).params, ['rho_0']);
+  assert.deepEqual(analyze(["y'=k_1x+t"]).params, ['k_1', 'x']);
+  assert.deepEqual(analyze(['u_t=u_xx']).space, ['xx']);
+});
+
+test('steady state: Laplace in 2D relaxes, 1D steady equations stay ODEs in x', () => {
+  const m = analyze(['u_{xx}+u_{yy}=0']);
+  assert.ok(m.steady && m.dims === 2);
+  assert.match(m.label, /steady state · u\(x,y\)$/);
+  assert.equal(analyze(["y''=-2"]).kind, 'ode');
 });
 
 test('wave, Burgers (uu_x), 2D ∇², KdV with \\cosh^2', () => {
@@ -95,7 +133,7 @@ test('helpful errors', () => {
   assert.throws(() => analyze(['y=3x']), /No derivative/);
   assert.deepEqual(analyze(["x'=y"]).params, ['y']); // undefined names become slider parameters, like Desmos
   assert.throws(() => analyze(["x'=y", "y'=x", "z=1"]), /3 equations for 2 unknowns/);
-  assert.throws(() => analyze(['u_{xx}+u_{yy}=0']), /time derivative/);
+  assert.throws(() => analyze(['u_{xx}+u_{yy}=0', 'v_{xx}=1']), /single equation/);
   assert.throws(() => analyze([String.raw`y'=\placeholder{}`]), /empty box/);
   assert.equal(toPlain("k_1 x").includes('k_1'), true);
 });

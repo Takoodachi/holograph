@@ -127,6 +127,17 @@ math-field::part(virtual-keyboard-toggle) { color: var(--faint); }
 .link span { color: var(--faint); }
 .link:hover { color: var(--accent); }
 
+/* describe a system in words */
+.describe { display: flex; border-bottom: 1px solid var(--line-strong); }
+.describe:focus-within { border-bottom-color: var(--accent); }
+.describe input { flex: 1; min-width: 0; background: transparent; border: 0; padding: 10px 2px; font-size: 14px; color: var(--text); }
+.describe input:focus { outline: none; }
+.describe input::placeholder { color: var(--faint); }
+.describe-go { border: 0; background: none; padding: 0 4px 0 10px; color: var(--accent); font-size: 11.5px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; }
+.describe-note { margin: 8px 0 0; min-height: 1.2em; font-size: 12.5px; color: var(--dim); }
+.describe-note.err { color: var(--text); }
+.describe-note .hint { border: 0; background: none; padding: 0; color: var(--accent); font-size: inherit; text-align: left; text-decoration: underline dotted; }
+
 .status { margin: 12px 0 0; min-height: 1.5em; font: 12px/1.5 var(--mono); color: var(--dim); }
 .status.err { color: var(--error); }
 .status:not(.err)::before { content: '● '; color: var(--accent); }
@@ -175,6 +186,8 @@ input[type='range']::-moz-range-thumb { width: 9px; height: 9px; border-radius: 
 .example:hover { border-color: var(--accent); background: rgba(255, 216, 74, 0.05); }
 .example small { font: 500 9.5px var(--mono); letter-spacing: 0.18em; color: var(--faint); }
 .example:hover small { color: var(--accent); }
+.example-group { grid-column: 1 / -1; margin: 10px 0 2px; font-size: 12px; font-weight: 500; letter-spacing: 0.06em; color: var(--text); }
+.example-group:first-child { margin-top: 0; }
 
 .help { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--dim); }
 .help summary { cursor: pointer; letter-spacing: 0.06em; color: var(--text); }

@@ -151,33 +151,38 @@ function fillGhosts(U, g, bc) {
   }
 }
 
-// bc: 'fixed' (ends held at their initial value), 'free' (zero slope) or 'periodic'
-export function pdeSim(model, P, { n, a, b, bc }, u0, v0) {
-  const two = model.tOrder === 2, dims = model.dims;
+// bc: 'fixed' (edges held at their initial value), 'free' (zero slope) or 'periodic'.
+// init: starting values by name, e.g. { u, u__t, v } as (x, y) => number; a missing one starts at 0.
+// S holds each field's padded grid in turn (and right after it, ∂ₜ for a 2nd-order field). The first field comes
+// first, so idx(i, j) reads it directly.
+export function pdeSim(model, P, { n, a, b, bc }, init) {
+  const dims = model.dims, fields = model.fields;
   const NX = n, NY = dims === 2 ? n : 1, dx = (b - a) / (bc === 'periodic' ? n : n - 1);
-  const g = { NX, NY, W: NX + 4, GY: dims === 2 ? 2 : 0, x0: a, dx, y0: a, dy: dims === 2 ? dx : 1 };
-  const L = g.W * (NY + 2 * g.GY), kernel = model.kernel(g);
-  const idx = (i, j) => (j + g.GY) * g.W + i + 2;
-  const S = new Float64Array(two ? 2 * L : L), fixed = [];
+  const W = NX + 4, GY = dims === 2 ? 2 : 0, L = W * (NY + 2 * GY);
+  const g = { NX, NY, W, GY, L, x0: a, dx, y0: a, dy: dims === 2 ? dx : 1 };
+  const off = {}, blocks = [];
+  for (const f of fields) {
+    off[f.name] = blocks.length * L;
+    blocks.push({ key: f.name, at: off[f.name] });
+    if (f.tOrder === 2) blocks.push({ key: `${f.name}__t`, at: off[f.name] + L });
+  }
+  const kernel = model.kernel(g, off), idx = (i, j) => (j + GY) * W + i + 2;
+  const S = new Float64Array(blocks.length * L), fixed = [];
   for (let j = 0; j < NY; j++) {
     for (let i = 0; i < NX; i++) {
-      const x = a + i * dx, y = a + j * g.dy;
-      S[idx(i, j)] = u0(x, y);
-      if (two) S[L + idx(i, j)] = v0(x, y);
-      if (bc === 'fixed' && (i === 0 || i === NX - 1 || (dims === 2 && (j === 0 || j === NY - 1)))) fixed.push(idx(i, j));
+      const x = a + i * dx, y = a + j * g.dy, k = idx(i, j);
+      for (const bl of blocks) S[bl.at + k] = init[bl.key]?.(x, y) ?? 0;
+      if (bc === 'fixed' && (i === 0 || i === NX - 1 || (dims === 2 && (j === 0 || j === NY - 1)))) fixed.push(k);
     }
   }
   const f = (t, X, dX) => {
-    const U = X.subarray(0, L);
-    fillGhosts(U, g, bc);
-    if (two) {
-      dX.set(X.subarray(L), 0);
-      kernel(P, t, U, X.subarray(L), dX.subarray(L));
-      for (const k of fixed) dX[k] = dX[L + k] = 0;
-    } else {
-      kernel(P, t, U, null, dX);
-      for (const k of fixed) dX[k] = 0;
+    for (const fl of fields) {
+      const o = off[fl.name];
+      fillGhosts(X.subarray(o, o + L), g, bc);
+      if (fl.tOrder === 2) dX.set(X.subarray(o + L, o + 2 * L), o); // ∂ₜu is the stored velocity
     }
+    kernel(P, t, X, dX);
+    for (const bl of blocks) for (const k of fixed) dX[bl.at + k] = 0;
   };
   return Object.assign(new Sim(f, S, Infinity), { NX, NY, idx, x0: a, dx });
 }

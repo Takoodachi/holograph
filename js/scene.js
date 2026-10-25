@@ -235,7 +235,7 @@ const readout = (obj, { labels, lo, hi }) => () => S => ({ at: obj.position.toAr
 // ---------- views ----------
 // (ctx) => (root) => { camera, update(S, t, dt), step?(S, t), flat?: {dir, center, w, h, hide?}, probe?(raycaster) → (S, t) => {at, text} }
 
-export const VIEW_NAMES = { spring: 'Mass–spring', pendulum: 'Pendulum', level: 'Tank level', phase: 'Phase space', attractor: '3D trajectory', profile: 'String / rod', surface: 'Membrane / plate', timeline: 'Time axis' };
+export const VIEW_NAMES = { spring: 'Mass–spring', pendulum: 'Pendulum', pendulum2: 'Double pendulum', level: 'Tank level', phase: 'Phase space', attractor: '3D trajectory', profile: 'String / rod', surface: 'Membrane / plate', timeline: 'Time axis' };
 
 // ---------- time axis: the solution computed ahead (Lookahead rows) laid out on a condensable t axis ----------
 
@@ -481,6 +481,35 @@ export const VIEWS = {
         rod.geometry.attributes.position.needsUpdate = true;
       },
       step: S => path.push(...at(S[0])),
+    };
+  },
+
+  // two angles, θ from straight down at the pivot and φ at the first bob; the second bob traces the chaos
+  pendulum2: ({ lo, hi, labels, coords }) => root => {
+    const L = 2, P = new THREE.Vector3(0, 5, 0), [a, b] = coords.phase;
+    const ball = r => new THREE.Group().add(wire(new THREE.IcosahedronGeometry(r, 1), T.accent, 0.6));
+    const bob1 = ball(0.3), bob2 = ball(0.36), rods = dynLine(3, T.line, 0.95), path = trail(500, T.accent, 0.45);
+    const mount = wire(new THREE.BoxGeometry(2.4, 0.16, 0.7, 4, 1, 1), T.line, 0.35);
+    mount.position.copy(P).add(new THREE.Vector3(0, 0.08, 0));
+    const guide = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(new THREE.EllipseCurve(0, 0, 2 * L, 2 * L).getPoints(128)), lineMat(T.line, 0.08));
+    guide.position.copy(P);
+    root.add(bob1, bob2, rods, path, mount, guide);
+    const at = S => {
+      const p1 = [P.x + L * Math.sin(S[a]), P.y - L * Math.cos(S[a]), 0];
+      return [p1, [p1[0] + L * Math.sin(S[b]), p1[1] - L * Math.cos(S[b]), 0]];
+    };
+    return {
+      camera: [[0, 3.6, 13.5], [0, 3.4, 0]],
+      flat: { dir: 'front', center: [0, 4.6, 0], w: 9, h: 9 },
+      probe: readout(bob2, { labels, lo, hi }),
+      update(S) {
+        const [p1, p2] = at(S);
+        bob1.position.set(...p1);
+        bob2.position.set(...p2);
+        rods.geometry.attributes.position.array.set([P.x, P.y, P.z, ...p1, ...p2]);
+        rods.geometry.attributes.position.needsUpdate = true;
+      },
+      step: S => path.push(...at(S)[1]),
     };
   },
 
