@@ -47,14 +47,15 @@
       <button data-look="plain" title="Same colours, no glow or glitch effects">Plain</button>
       <button data-look="light" title="Dark lines on a light background">Light</button>
     </div>
-    <h2 class="label">AI (optional)</h2>
+    <h2 class="label">AI for "Describe it"</h2>
     <div id="ai-provider" class="seg" role="group" aria-label="AI provider">
+      <button data-ai="qwen" title="Free for everyone, no key needed, a few builds a day">Qwen · free</button>
       <button data-ai="anthropic" title="Anthropic Claude">Claude</button>
       <button data-ai="openai" title="OpenAI GPT">GPT</button>
       <button data-ai="gemini" title="Google Gemini">Gemini</button>
     </div>
     <input id="ai-key" class="key" type="password" autocomplete="off" spellcheck="false" aria-label="API key for the chosen AI provider">
-    <p class="settings-note">Lets "Describe it" build systems the built-in reader doesn't know. Each key stays in this browser and goes only to its provider. A build costs a few cents, so use a key with a spend limit. <a id="ai-key-link" target="_blank" rel="noopener">Get a key</a></p>
+    <p class="settings-note">Builds the systems the built-in reader doesn't know. Qwen is free for everyone, up to a few builds a day. The others use your own key, which stays in this browser and goes only to that provider; a build costs a few cents, so use a key with a spend limit. <a id="ai-key-link" target="_blank" rel="noopener">Get a key</a></p>
   </div>
 
   <aside class="panel">

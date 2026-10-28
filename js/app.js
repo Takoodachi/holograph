@@ -527,16 +527,19 @@ $('#examples').replaceChildren(...PRESETS.flatMap((p, i) => {
 }));
 
 // ---------- describe a system in words → equations, loaded like an example ----------
-// The built-in reader goes first; the AI chosen in Settings (with the user's own key for it) takes what it can't place.
+// The built-in reader goes first; the AI chosen in Settings takes what it can't place: the free Qwen by default,
+// or another provider with the user's own key.
 const saved = k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } };
 const save = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch {} };
 let provider, aiKey;
+const aiReady = () => PROVIDERS[provider].free || aiKey;
 function setProvider(id) {
-  provider = PROVIDERS[id] ? id : 'anthropic';
+  provider = PROVIDERS[id] ? id : 'qwen';
   aiKey = saved(`holograph.key.${provider}`); // one key per provider, so switching back finds it again
   save('holograph.ai', provider);
   Object.assign($('#ai-key'), { value: aiKey, placeholder: `${PROVIDERS[provider].company} API key` });
   $('#ai-key-link').href = PROVIDERS[provider].keyUrl;
+  $('#ai-key').hidden = $('#ai-key-link').hidden = !!PROVIDERS[provider].free;
   document.querySelectorAll('#ai-provider button').forEach(b => b.classList.toggle('on', b.dataset.ai === provider));
 }
 document.querySelectorAll('#ai-provider button').forEach(b => { b.onclick = () => setProvider(b.dataset.ai); });
@@ -550,16 +553,16 @@ const openSettings = () => $('#settings').showPopover();
 function buildFromWords(text) {
   const p = text.trim() && describe(text);
   if (!p) {
-    if (text.trim() && aiKey) return askAI(text);
+    if (text.trim() && aiReady()) return askAI(text);
     note('err', text.trim() ? "Couldn't tell which system that is. Try: " : 'Try: ', ...DESCRIBE_HINTS.slice(0, 3).flatMap((h, i) => {
       const b = hint(h, () => { $('#describe-text').value = h; buildFromWords(h); });
       return i ? [' · ', b] : [b];
-    }), ...(text.trim() ? ['. Or add an API key for Claude, GPT or Gemini in ', hint('Settings', openSettings), ' and AI will try it.'] : []));
+    }), ...(text.trim() ? [`. Or add your ${PROVIDERS[provider].company} API key in `, hint('Settings', openSettings), ', or pick the free Qwen there.'] : []));
     return;
   }
   load(p);
   note('', `Built: ${[p.name, ...p.notes].join(' · ')}. Edit the equation below to refine it.`,
-    ...(aiKey ? [' ', hint(`Ask ${PROVIDERS[provider].name} instead`, () => askAI(text))] : []));
+    ...(aiReady() ? [' ', hint(`Ask ${PROVIDERS[provider].name} instead`, () => askAI(text))] : []));
 }
 
 async function askAI(text) {

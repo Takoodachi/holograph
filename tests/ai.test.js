@@ -1,7 +1,8 @@
 // AI mode with the APIs mocked: what a model returns is untrusted and must pass the app's parser before it loads.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildWithAI, toPreset, PROVIDERS, SCHEMA } from '../js/ai.js';
+import { buildWithAI, toPreset, PROVIDERS } from '../js/ai.js';
+import { SCHEMA } from '../js/prompt.js';
 import { analyze } from '../js/parse.js';
 
 // a fake Anthropic SDK client answering with each item in turn: an answer object (sent back as JSON text), a response, or an error
@@ -127,4 +128,20 @@ test('refusals, cut-off answers and API errors become readable messages', async 
   // Gemini reports a bad key as a 400, with the error wrapped in an array
   await assert.rejects(chat('gemini', { status: 400, body: [{ error: { code: 400, message: 'API key not valid.' } }] }), /Google API error 400: API key not valid/);
   await assert.rejects(chat('gemini', new TypeError('Failed to fetch')), /Couldn't reach the Google API/);
+});
+
+test('free Qwen: no key sent, JSON pulled out of reasoning and code fences, bad JSON retried', async () => {
+  const wrapped = `<think>a bowl {is} a parabola</think>\n\`\`\`json\n${JSON.stringify(bowl)}\n\`\`\``;
+  const fetch = fakeFetch({ choices: [{ message: { content: 'Sure! {not json' }, finish_reason: 'stop' }] }, { choices: [{ message: { content: wrapped }, finish_reason: 'stop' }] });
+  const p = await buildWithAI('a ball in a bowl', { provider: 'qwen', fetch });
+  assert.equal(p.name, 'Ball in a bowl');
+  assert.equal(fetch.calls[0].url, PROVIDERS.qwen.url);
+  assert.equal(fetch.calls[0].headers.authorization, undefined);
+  assert.match(fetch.calls[1].body.messages[1].content, /JSON/); // the parse error went back as the retry
+  // the Worker's own messages reach the user unchanged
+  await assert.rejects(buildWithAI('x', { provider: 'qwen', fetch: fakeFetch({ status: 429, body: { error: { message: "You've used today's 10 free AI requests." } } }) }), /today's 10 free/);
+});
+
+test('answers whose lists are not lists are rejected before parsing', () => {
+  assert.throws(() => toPreset({ ...bowl, params: { b: 0.2, g: 9.81 } }), /must be lists/);
 });

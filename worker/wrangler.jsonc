@@ -1,0 +1,9 @@
+// Holograph's free Qwen. Deploy from this folder with: npx wrangler@4.150.0 deploy
+// LIMITS holds each visitor's daily request count (KV namespace "holograph-ai-limits", made on the first deploy).
+{
+  "name": "holograph-ai",
+  "main": "index.js",
+  "compatibility_date": "2026-10-13",
+  "ai": { "binding": "AI" },
+  "kv_namespaces": [{ "binding": "LIMITS", "id": "7141a255211d435ab55641239cb99cf0" }]
+}
